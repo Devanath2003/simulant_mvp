@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+playwright
+langgraph
+openai
+httpx
+pydantic
+python-dotenv
+pyyaml
+websockets
