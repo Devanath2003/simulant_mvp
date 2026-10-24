@@ -16,7 +16,16 @@ EXTRACT_JS = r"""
   const lum = c => { const f = v => { v/=255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); }; return 0.2126*f(c.r)+0.7152*f(c.g)+0.0722*f(c.b); };
   const bgOf = el => { let e = el; while (e) { const c = parseRGB(getComputedStyle(e).backgroundColor); if (c && c.a > 0.5) return c; e = e.parentElement; } return {r:255,g:255,b:255,a:1}; };
   const contrast = el => { const fg = parseRGB(getComputedStyle(el).color); if (!fg) return null; const bg = bgOf(el); const l1 = lum(fg), l2 = lum(bg); return (Math.max(l1,l2)+0.05)/(Math.min(l1,l2)+0.05); };
-  const visible = (el, r) => { const s = getComputedStyle(el); return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && parseFloat(s.opacity) > 0.05; };
+  // cut away by an ancestor with overflow:hidden (collapsed mobile menus, closed accordions): present in the DOM, invisible to a user
+  const clipped = (el, r) => {
+    for (let a = el.parentElement; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
+      if (getComputedStyle(a).overflow === 'visible') continue;
+      const c = a.getBoundingClientRect();
+      if (Math.min(r.right, c.right) - Math.max(r.left, c.left) < 2 || Math.min(r.bottom, c.bottom) - Math.max(r.top, c.top) < 2) return true;
+    }
+    return false;
+  };
+  const visible = (el, r) => { const s = getComputedStyle(el); return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && parseFloat(s.opacity) > 0.05 && !clipped(el, r); };
   const labelOf = el => {
     const t = (v) => (v || '').replace(/\s+/g, ' ').trim().slice(0, 70);
     let n = t(el.getAttribute('aria-label'));
@@ -30,18 +39,53 @@ EXTRACT_JS = r"""
     if (!n) { const img = el.querySelector && el.querySelector('img[alt]'); if (img) n = t(img.alt); }
     return n;
   };
-  const out = [];
-  let id = 0;
+  // what an unlabeled icon looks like to a person (a user sees the three-line menu icon even if the DOM has no text)
+  const ICONS = [['☰ menu icon', /hamburger|burger|menu|nav-?toggle|navbar-toggler|offcanvas|drawer/], ['magnifier (search) icon', /search/],
+                 ['cart icon', /cart|basket|bag/], ['× close icon', /close|dismiss/], ['person (account) icon', /user|account|profile|login/],
+                 ['heart icon', /heart|wish|fav/], ['filter icon', /filter/], ['arrow icon', /arrow|chevron|next|prev|back/]];
+  const iconOf = el => {
+    const svgTitle = el.querySelector && el.querySelector('svg title');
+    if (svgTitle && svgTitle.textContent.trim()) return svgTitle.textContent.trim().slice(0, 40) + ' icon';
+    const hint = [el, ...(el.querySelectorAll ? el.querySelectorAll('svg,i,span,img') : [])].slice(0, 4)
+      .map(e => ((typeof e.className === 'string' ? e.className : (e.className && e.className.baseVal) || '') + ' ' + (e.id || '') + ' ' + (e.getAttribute('data-icon') || '') + ' ' + (e.getAttribute('src') || '').split('/').pop())).join(' ').toLowerCase();
+    const hit = ICONS.find(([, re]) => re.test(hint));
+    return hit ? hit[0] : '';
+  };
+  const formOf = el => {      // which form a control belongs to (only shown when the page has several forms)
+    const f = el.form || (el.closest && el.closest('form'));
+    if (!f || document.forms.length < 2) return undefined;
+    let h = f.querySelector('h1,h2,h3,h4,legend');
+    if (!h && f.parentElement) h = f.parentElement.querySelector('h1,h2,h3,h4');
+    const t = h ? (h.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 40) : '';
+    return t || (f.getAttribute('action') || '').slice(0, 30) || undefined;
+  };
+  // keep the MAX elements closest to what the user currently sees (not just the first MAX in the DOM)
+  const vis = [];
+  const POINTER_ONLY = new Set(['DIV', 'SPAN', 'LI', 'IMG', 'SVG', 'TD', 'P']);   // added above only for cursor:pointer
+  const sameText = (a, b) => (a.innerText || '').trim() === (b.innerText || '').trim();
   for (const el of cands) {
     const r = el.getBoundingClientRect();
-    if (!visible(el, r)) continue;
-    if (el.closest('[data-sim-skip]')) continue;
+    if (!visible(el, r) || el.closest('[data-sim-skip]')) continue;
+    // <li class=pointer><a>Books</a></li>: one thing to the user, keep only the real link
+    if (POINTER_ONLY.has(el.tagName.toUpperCase()) && !el.matches(sel) && [...el.querySelectorAll(sel)].some(c => cands.has(c) && sameText(c, el))) continue;
+    const dist = r.bottom < 0 ? -r.bottom : r.top > innerHeight ? r.top - innerHeight : 0;
+    vis.push({el, r, dist});
+  }
+  const keep = new Set(vis.slice().sort((a, b) => a.dist - b.dist).slice(0, MAX).map(v => v.el));
+  const chosen = vis.filter(v => keep.has(v.el))
+    .sort((a, b) => (a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);
+  const more = {above: 0, below: 0};
+  vis.forEach(v => { if (!keep.has(v.el)) { if (v.r.bottom < 0) more.above++; else more.below++; } });
+  const out = [];
+  let id = 0;
+  for (const {el, r} of chosen) {
     id += 1;
     el.setAttribute('data-sim-id', String(id));
     const tag = el.tagName.toLowerCase();
     const type = el.getAttribute('role') || (tag === 'input' ? (el.type || 'text') : tag);
-    const name = labelOf(el);
+    const label = labelOf(el);
     const hasIcon = !!(el.querySelector && el.querySelector('svg,img,i,[class*=icon]'));
+    const name = label || iconOf(el);
     const inView = r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
     let covered = '';
     if (inView) {
@@ -51,9 +95,10 @@ EXTRACT_JS = r"""
     }
     const c = contrast(el);
     out.push({
-      id, tag, type, name, icon_only: (!name && hasIcon) || undefined,
+      id, tag, type, name, icon_only: (!label && !!(hasIcon || name)) || undefined,
       value: ['INPUT','TEXTAREA','SELECT'].includes(el.tagName) && el.type !== 'password' ? (el.value || '').slice(0, 40) : undefined,
-      options: tag === 'select' ? Array.from(el.options).slice(0, 8).map(o => o.text.trim().slice(0, 25)) : undefined,
+      options: tag === 'select' ? Array.from(el.options).slice(0, 8).map(o => o.text.trim().slice(0, 25))
+        .concat(el.options.length > 8 ? ['...+' + (el.options.length - 8) + ' more (select any by its text)'] : []) : undefined,
       disabled: el.disabled || el.getAttribute('aria-disabled') === 'true' || undefined,
       checked: el.checked || undefined,
       required: el.required || undefined,
@@ -62,8 +107,8 @@ EXTRACT_JS = r"""
       covered: covered || undefined,
       small: Math.min(r.width, r.height) < 30 || undefined,
       low_contrast: (c !== null && c < 3 && name) ? Number(c.toFixed(2)) : undefined,
+      form: formOf(el),
     });
-    if (id >= MAX) break;
   }
   // hidden / readonly fields: invisible to ordinary users, tamper targets for the integrity persona
   const hidden = [];
@@ -75,9 +120,22 @@ EXTRACT_JS = r"""
   const alerts = Array.from(document.querySelectorAll('[role=alert],[aria-live],.error,.alert,.toast,.notification,.flash,[class*=error],[class*=toast]'))
     .map(e => (e.innerText || '').replace(/\s+/g, ' ').trim()).filter(t => t && t.length < 200).slice(0, 5);
   const text = (document.body ? document.body.innerText : '').replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();
+  // text the user can actually see right now (long pages: the start of the page is often irrelevant)
+  let seen = [], len = 0;
+  const tw = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+  let tn;
+  while ((tn = tw.nextNode()) && len < (opts.textMax || 1500)) {
+    const s = tn.textContent.replace(/\s+/g, ' ').trim();
+    const p = tn.parentElement;
+    if (!s || !p || ['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(p.tagName)) continue;
+    const r = p.getBoundingClientRect();
+    if (r.bottom <= 0 || r.top >= innerHeight || r.width < 1 || getComputedStyle(p).visibility === 'hidden' || clipped(p, r)) continue;
+    if (seen[seen.length - 1] !== s) { seen.push(s); len += s.length + 1; }
+  }
+  const viewText = seen.join('\n');
   return {
-    url: location.href, title: document.title, elements: out, hidden, alerts,
-    text: text.slice(0, opts.textMax || 1500), text_len: text.length,
+    url: location.href, title: document.title, elements: out, hidden, alerts, more,
+    text: (viewText.length > 150 ? viewText : text).slice(0, opts.textMax || 1500), full_text: text.slice(0, 3000), text_len: text.length,
     scroll: {y: Math.round(scrollY), max: Math.max(0, document.documentElement.scrollHeight - innerHeight)},
   };
 }
@@ -88,8 +146,15 @@ SIGNATURE_JS = r"""
 () => {
   const t = document.body ? document.body.innerText : '';
   let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0;
+  // control state is visible to the user but not in innerText: a ticked checkbox or chosen option IS a visible change
+  let st = 0;
+  document.querySelectorAll('input[type=checkbox],input[type=radio],select,[aria-expanded],[aria-checked],[aria-selected],details').forEach((e, i) => {
+    const v = (e.checked ? 1 : 0) + (e.open ? 2 : 0) + (e.tagName === 'SELECT' ? 4 * (e.selectedIndex + 1) : 0)
+            + (e.getAttribute('aria-expanded') === 'true' ? 3 : 0) + (e.getAttribute('aria-checked') === 'true' ? 5 : 0) + (e.getAttribute('aria-selected') === 'true' ? 7 : 0);
+    st = (st * 31 + v * (i + 1)) | 0;
+  });
   return {url: location.href, h, n: document.querySelectorAll('*').length,
-          dis: document.querySelectorAll(':disabled').length, y: Math.round(scrollY)};
+          dis: document.querySelectorAll(':disabled').length, y: Math.round(scrollY), st};
 }
 """
 
@@ -185,5 +250,20 @@ FILL_JS = r"""
     n++;
   });
   return n;
+}
+"""
+
+# Would clicking this control (or pressing Enter in it) submit a form the browser refuses? Returns the native bubbles.
+VALIDATION_JS = r"""
+(el, enter) => {
+  const f = el.form || (el.closest && el.closest('form'));
+  if (!f || f.noValidate || el.formNoValidate) return [];
+  const t = (el.getAttribute('type') || '').toLowerCase();
+  const submits = (el.tagName === 'BUTTON' && (t === '' || t === 'submit')) || (el.tagName === 'INPUT' && (t === 'submit' || t === 'image'));
+  if (!submits && !enter) return [];
+  const lab = x => ((x.labels && x.labels[0] && x.labels[0].innerText) || x.getAttribute('aria-label') || x.placeholder || x.name || x.id || x.type || '')
+    .replace(/\s+/g, ' ').trim().slice(0, 40);
+  return Array.from(f.elements).filter(x => x.willValidate && !x.checkValidity()).slice(0, 6)
+    .map(x => ({name: lab(x), msg: x.validationMessage}));
 }
 """

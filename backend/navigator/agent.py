@@ -1,5 +1,7 @@
 """One persona = one LangGraph run:  observe -> decide -> execute -> observe ... -> finalize."""
+import ast
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -42,6 +44,7 @@ class S(TypedDict, total=False):
     tried: dict            # integrity: abuse idea -> number of actions spent on it
     done_refused: int
     nudge: str
+    agent_error: bool
 
 
 @dataclass
@@ -57,6 +60,7 @@ class Ctx:
     findings: list = field(default_factory=list)
     bg: list = field(default_factory=list)
     seen_pages: set = field(default_factory=set)
+    identity: dict = field(default_factory=dict)
     seen_audit: set = field(default_factory=set)
     visited: list = field(default_factory=list)
     shot: str = ""         # latest screenshot (path relative to run dir)
@@ -72,19 +76,69 @@ class Ctx:
 
 
 # --------------------------------------------------------------------------- helpers
-def clean_actor(data: dict, integrity: bool) -> ActorOutput:
+def _as_field_list(v) -> list:
+    """Models sometimes put the fill list in "value", or as a JSON/Python string - accept all of those."""
+    if isinstance(v, str) and v.strip().startswith("["):
+        for parse in (json.loads, ast.literal_eval):
+            try:
+                v = parse(v)
+                break
+            except (ValueError, SyntaxError):
+                pass
+    if isinstance(v, dict):
+        v = [{"target": k, "value": val} for k, val in v.items()]
+    return v if isinstance(v, list) and all(isinstance(x, dict) for x in v) else []
+
+
+def resolve_target(t, obs: dict | None):
+    """Element id from whatever the model wrote: 3, "3", "[3]", or the element's label ("Username")."""
+    if t is None or t == "":
+        return None
+    if isinstance(t, (int, float)):
+        return int(t)
+    s = str(t).strip()
+    m = re.fullmatch(r"\[?\s*(\d+)\s*\]?", s)
+    if m:
+        return int(m.group(1))
+    if obs:
+        want = s.lower().strip('"\' ')
+        items = [(e["id"], (e.get("name") or "").lower()) for e in obs.get("elements", [])]
+        items += [(h["id"], h["name"].lower()) for h in obs.get("hidden", [])]
+        for match in (lambda n: n == want, lambda n: n.rstrip(" *") == want.rstrip(" *"), lambda n: want in n or (n and n in want)):
+            hits = [i for i, n in items if match(n)]
+            if hits:
+                return hits[0]
+    return None
+
+
+def clean_actor(data: dict, integrity: bool, obs: dict | None = None) -> ActorOutput:
+    data = dict(data)
+    if not data.get("fields") and _as_field_list(data.get("value")):
+        data["fields"], data["value"] = _as_field_list(data["value"]), None
+        data["action"] = "fill"
+    data["fields"] = _as_field_list(data.get("fields"))
+    if data["fields"] and data.get("action") in ("type", "fill", "select", None):
+        data["action"] = "fill"
     d = {k: data.get(k) for k in ActorOutput.model_fields if k in data}
-    for k in ("target", "confusion"):
-        try:
-            d[k] = int(float(d[k])) if d.get(k) not in (None, "") else (0 if k == "confusion" else None)
-        except (TypeError, ValueError):
-            d[k] = 0 if k == "confusion" else None
+    d["target"] = resolve_target(d.get("target"), obs)
+    try:
+        d["confusion"] = int(float(d.get("confusion") or 0))
+    except (TypeError, ValueError):
+        d["confusion"] = 0
     d["confusion"] = max(0, min(10, d.get("confusion") or 0))
     for k in ("thought", "ux_note", "value"):
         if d.get(k) is not None and not isinstance(d[k], str):
             d[k] = str(d[k])
     if isinstance(d.get("success"), str):
         d["success"] = d["success"].lower() == "true"
+    fields = []
+    for f in d.get("fields") or []:
+        tid = resolve_target(f.get("target", f.get("id", f.get("field"))), obs)
+        if tid is not None:
+            fields.append({"target": tid, "value": "" if f.get("value") is None else str(f["value"])})
+    d["fields"] = fields
+    if d.get("action") == "fill" and not fields:          # "fill" with a single target/value is just a type
+        d["action"] = "type"
     a = ActorOutput(**d)
     if not integrity and a.action in ("tamper", "repeat", "goto", "fill_form"):
         a = ActorOutput(thought=a.thought, action="wait", value="1", ux_note="", confusion=a.confusion)
@@ -98,6 +152,10 @@ def names_by_id(obs: dict) -> dict:
 
 
 def describe(a: ActorOutput, obs: dict) -> str:
+    if a.action == "fill":
+        names = names_by_id(obs)
+        parts = [f"[{f['target']}] {names.get(f['target'], '?')[:18]}={f['value'][:18]!r}" for f in a.fields[:6]]
+        return f"fill {len(a.fields)} fields: " + ", ".join(parts) + (" ..." if len(a.fields) > 6 else "")
     nm = names_by_id(obs).get(a.target, "") if a.target is not None else ""
     t = f' [{a.target}] "{nm}"' if a.target is not None else ""
     v = f" = {a.value!r}" if a.value not in (None, "") and a.action in ("type", "select", "tamper", "goto", "repeat") else ""
@@ -119,10 +177,15 @@ def build_graph(ctx: Ctx):
         step = s.get("step", 0) + 1
         if step > P.max_steps:
             return {"status": "failure", "reason": f"ran out of patience/steps ({P.max_steps}) before finishing the goal"}
-        obs = await sess.observe()
+        try:
+            obs = await sess.observe()
+        except Exception:  # noqa: BLE001 - page was mid-navigation or busy: give it a moment, try once more
+            await asyncio.sleep(1.5)
+            obs = await sess.observe()
         jpg = await sess.screenshot()
-        rel = f"shots/{P.id}_{step:02d}.jpg"
-        (ctx.run_dir / rel).write_bytes(jpg)
+        rel = f"shots/{P.id}_{step:02d}.jpg" if jpg else ""
+        if jpg:
+            (ctx.run_dir / rel).write_bytes(jpg)
         ctx.shot, ctx.shot_bytes = rel, jpg
         ctx.emit("screen", persona=P.id, step=step, url=obs["url"], title=obs["title"], shot=rel,
                  n_elements=len(obs["elements"]))
@@ -141,7 +204,8 @@ def build_graph(ctx: Ctx):
                         ctx.add(f)
                 for f in sensors.load_time_finding(P, obs["url"], sess.load_ms.get(obs["url"], 0), step, rel):
                     ctx.add(f)
-                ctx.bg.append(asyncio.create_task(perceive(ctx, obs, jpg, step, rel)))
+                if jpg:
+                    ctx.bg.append(asyncio.create_task(perceive(ctx, obs, jpg, step, rel)))
 
         fr, why = s.get("frustration", 0), list(s.get("why", []))
         new_alerts = [a for a in obs["alerts"] if a not in s.get("prev_alerts", [])]
@@ -152,7 +216,8 @@ def build_graph(ctx: Ctx):
         upd["frustration"], upd["why"] = fr, why
 
         if integrity and s.get("last_desc"):                # did the last abuse attempt break a business rule?
-            prev_txt, cur_txt = s.get("obs", {}).get("text", ""), obs["text"]
+            po = s.get("obs", {})                            # full page text: totals are often outside the viewport
+            prev_txt, cur_txt = po.get("full_text", po.get("text", "")), obs.get("full_text", obs["text"])
             if NEG_TOTAL.search(cur_txt) and not NEG_TOTAL.search(prev_txt):
                 ctx.add(Finding(persona=P.id, engine="integrity", vital="integrity", severity="critical", source="oracle",
                                 category="invalid_quantity", title="Negative amount accepted in the cart/total", url=obs["url"], step=step, screenshot=rel,
@@ -170,6 +235,9 @@ def build_graph(ctx: Ctx):
         if len(recent) >= 3 and len(set(recent[-3:])) == 1 and not recent[-1][3]:
             warnings.append("You already repeated the exact same action 3 times without effect. Try something different, or give_up.")
         if len(recent) >= 5 and len(set(recent[-5:])) == 1:
+            if s.get("agent_error"):         # our own malformed actions are not the site's fault: no finding
+                ctx.emit("log", persona=P.id, msg="navigator could not operate this page: " + s.get("last_result", "")[:120])
+                return {"status": "error", "reason": "navigator problem (not a site issue): " + s.get("last_result", "")[:150]}
             ctx.add(Finding(persona=P.id, engine=P.engine, vital="usability", severity="high", source="sensor",
                             title=f"User stuck repeating '{s.get('last_desc', '')}' with no effect", url=obs["url"],
                             step=s["step"], screenshot=ctx.shot,
@@ -182,16 +250,16 @@ def build_graph(ctx: Ctx):
         for k, n in s.get("tried", {}).items():
             if n >= 4:
                 warnings.append(f"You already spent {n} actions on '{k}'. Move on to an idea you have NOT attempted yet, or finish with done.")
-        system = prompts.actor_system(P, ctx.goal, ctx.focus, ctx.site_url)
-        user = prompts.actor_user(P, s, obs, warnings, ctx.visited)
+        system = prompts.actor_system(P, ctx.goal, ctx.focus, ctx.site_url, ctx.identity)
+        user = prompts.actor_user(P, s, obs, warnings, ctx.visited, ctx.goal)
         try:
             data = await llm.json("actor", system, user, max_tokens=600)
-            a = clean_actor(data, integrity)
+            a = clean_actor(data, integrity, obs)
             ctx.stats["llm_calls"] += 1
             if a.action == "look":                           # vision grounder (Set-of-Marks) for things the DOM can't describe
                 hint = await ground(ctx, a.value or a.thought, obs)
                 data = await llm.json("actor", system, user + f"\n\nVision helper: {hint}\nNow choose your action.", max_tokens=600)
-                a = clean_actor(data, integrity)
+                a = clean_actor(data, integrity, obs)
                 if a.action == "look":
                     a = ActorOutput(thought=a.thought, action="wait", value="1")
                 ctx.stats["llm_calls"] += 2
@@ -250,12 +318,14 @@ def build_graph(ctx: Ctx):
         progress = res.ok and res.changed and res.url_changed
 
         if not res.ok:
-            fr += 12; why.append(f"could not {a.action} '{nm}': {res.error}")
-            sev = "high" if "covering" in res.error or "disabled" in res.error else "medium"
-            ctx.add(Finding(persona=P.id, engine=P.engine, vital="usability", severity=sev, source="sensor",
-                            title=f"Cannot {a.action} '{nm or 'element'}': {res.error[:80]}", url=obs["url"], step=s["step"],
-                            screenshot=ctx.shot, detail=f"Playwright could not {a.action} element [{a.target}] '{nm}': {res.error}",
-                            suggested_fix="Make sure interactive elements are not covered by banners/overlays and explain why a control is disabled."))
+            if "covering" in res.error or "disabled" in res.error:   # a site problem; other errors are the agent's own mistakes
+                fr += 12; why.append(f"could not {a.action} '{nm}': {res.error}")    # and never frustrate the persona
+                ctx.add(Finding(persona=P.id, engine=P.engine, vital="usability", severity="high", source="sensor",
+                                title=f"Cannot {a.action} '{nm or 'element'}': {res.error[:80]}", url=obs["url"], step=s["step"],
+                                screenshot=ctx.shot, detail=f"The {a.action} on [{a.target}] '{nm}' failed: {res.error}",
+                                suggested_fix="Make sure interactive elements are not covered by banners/overlays and explain why a control is disabled."))
+        elif res.validation:                 # browser refused the form and said why: feedback, a small annoyance
+            fr += 4; why.append(f"form not accepted: '{res.validation[0]['name']}' {res.validation[0]['msg'][:50]}")
         elif a.action in ("click", "repeat") and not res.changed:
             fr += 15
             reqs = ", ".join(res.requests) or "none"
@@ -301,9 +371,12 @@ def build_graph(ctx: Ctx):
         if integrity and a.attack in prompts.ATTACKS and (a.action == "goto" or (a.action in ("click", "repeat") and any(r.startswith("POST") for r in res.requests))):
             tried[a.attack] = tried.get(a.attack, 0) + 1      # only counts once it was actually submitted to the server
         upd: dict = {"tried": tried, "history": hist, "recent": recent, "frustration": fr, "why": why[-8:], "last_desc": desc,
-                     "last_result": res.summary(), "last_thought": a.thought, "last_requests": res.requests}
+                     "last_result": res.summary(), "last_thought": a.thought, "last_requests": res.requests,
+                     # failed for a reason that is the navigator's fault, not the site's (bad id, malformed action...)
+                     "agent_error": (not res.ok) and not ("covering" in res.error or "disabled" in res.error)}
         ctx.emit("action", persona=P.id, step=s["step"], desc=desc, result=res.summary(), ok=res.ok, changed=res.changed,
-                 first_change_s=res.first_change_s, rage_clicks=res.rage_clicks, requests=res.requests, frustration=fr)
+                 first_change_s=res.first_change_s, rage_clicks=res.rage_clicks, requests=res.requests, frustration=fr,
+                 agent_error=upd["agent_error"])
         if fr >= P.abandon_at:
             ctx.add(Finding(persona=P.id, engine=P.engine, vital="usability", severity="critical", source="sensor",
                             title=f"Drop-off: {P.name.split(' - ')[0]} abandoned the site (frustration {fr}/100) on {path_of(obs['url'])}",
@@ -320,7 +393,7 @@ def build_graph(ctx: Ctx):
             for t in ctx.bg:
                 if not t.done():
                     t.cancel()
-        for f in sensors.runtime_findings(P, sess.console_errors, sess.http_errors):
+        for f in sensors.runtime_findings(P, sess.console_errors, sess.http_errors, sess.origin):
             ctx.add(f)
         status = s.get("status", "failure")
         ctx.emit("persona_end", persona=P.id, status=status, reason=s.get("reason", ""), steps=s.get("step", 0),

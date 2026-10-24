@@ -1,5 +1,6 @@
 """Playwright session for one persona: device/network emulation, observation, actions, effect measurement."""
 import asyncio
+import base64
 import re
 import time
 from dataclasses import dataclass, field
@@ -9,11 +10,22 @@ from urllib.parse import urljoin, urlparse
 from playwright.async_api import Browser, Error as PWError, Page
 
 from backend.models import ActorOutput, Persona
-from backend.navigator.dom import AUDIT_JS, EXTRACT_JS, FILL_JS, SIGNATURE_JS, SOM_OFF_JS, SOM_ON_JS
+from backend.navigator.dom import AUDIT_JS, EXTRACT_JS, FILL_JS, VALIDATION_JS, SIGNATURE_JS, SOM_OFF_JS, SOM_ON_JS
 
 # "slow 3G"-ish: 400ms RTT, ~1.2 Mbit/s down, ~600 kbit/s up
 SLOW_3G = dict(offline=False, latency=400, downloadThroughput=150 * 1024, uploadThroughput=75 * 1024)
 STATIC_EXT = re.compile(r"\.(css|js|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|map)(\?|$)", re.I)
+
+
+def site_of(url_or_netloc: str) -> str:
+    """The site a URL belongs to: www.wikipedia.org and en.wikipedia.org are one site; localhost/IPs keep their port."""
+    netloc = urlparse(url_or_netloc).netloc if "//" in url_or_netloc else url_or_netloc
+    host = netloc.split(":")[0].lower()
+    if host == "localhost" or re.fullmatch(r"[\d.]+", host):
+        return netloc.lower()
+    labels = host.split(".")
+    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in ("co", "com", "org", "net", "ac", "gov", "edu") else 2
+    return ".".join(labels[-keep:])
 
 
 @dataclass
@@ -30,12 +42,22 @@ class ActionResult:
     url_changed: bool = False
     eventually_changed: bool = False   # page differs from before once the network went quiet (even if it was slow)
     kind: str = "click"
+    validation: list = field(default_factory=list)    # browser-native "Please fill out this field." bubbles that blocked a submit
+    filled: int = 0
+    fill_errors: list = field(default_factory=list)
 
     def summary(self) -> str:
         if not self.ok:
             return f"FAILED: {self.error}"
+        if self.validation:
+            v = self.validation[0]
+            others = ", ".join(f"'{x['name']}'" for x in self.validation[1:])
+            return (f"the browser blocked the submit and showed the message \"{v['msg']}\" next to '{v['name']}'"
+                    + (f" (also not valid yet: {others})" if others else ""))
+        if self.kind == "fill":
+            return (f"filled {self.filled} field(s) - not submitted yet" + (f"; problems: {'; '.join(self.fill_errors)}" if self.fill_errors else ""))
         if self.kind in ("type", "select", "tamper", "fill_form"):
-            return "value entered locally - NOTHING was sent to the server; click the page's submit/Update/Apply/Pay button to send it"
+            return "entered - not submitted yet (nothing is sent until you click the form's submit/Update/Apply/Pay button)"
         if self.kind in ("scroll", "wait"):
             return "done" + (f"; popup said: {self.dialogs[0][:60]}" if self.dialogs else "")
         if not self.changed:
@@ -53,6 +75,7 @@ class Session:
         self.browser, self.pw, self.persona = browser, playwright, persona
         self.start_url = start_url
         self.origin = urlparse(start_url).netloc
+        self.site = site_of(start_url)
         self.context = None
         self.page: Optional[Page] = None
         self.net: list[dict] = []          # every request: {t, method, url, type, status}
@@ -84,9 +107,9 @@ class Session:
         await self.goto(self.start_url)
 
     async def _guard(self, route):
-        """Stay on the site under test: block top-level navigation to other origins."""
+        """Stay on the site under test: block top-level navigation to other sites."""
         req = route.request
-        if req.is_navigation_request() and req.url.startswith("http") and urlparse(req.url).netloc != self.origin:
+        if req.is_navigation_request() and req.url.startswith("http") and site_of(req.url) != self.site:
             await route.abort()
         else:
             await route.continue_()
@@ -97,7 +120,8 @@ class Session:
 
     def _attach(self, page: Page):
         self.page = page
-        page.on("console", lambda m: self.console_errors.append(m.text[:200]) if m.type == "error" else None)
+        page.on("console", lambda m: self.console_errors.append(
+            m.text[:200] + (f" (at {m.location.get('url', '')[:120]})" if m.location and m.location.get("url") else "")) if m.type == "error" else None)
         page.on("pageerror", lambda e: self.console_errors.append("Uncaught: " + str(e)[:200]))
         page.on("dialog", lambda d: asyncio.ensure_future(self._on_dialog(d)))
         page.on("request", self._on_request)
@@ -130,7 +154,7 @@ class Session:
     # ------------------------------------------------------------ navigation / observation
     def same_site(self, url: str) -> str:
         full = urljoin(self.page.url if self.page else self.start_url, url)
-        if urlparse(full).netloc != self.origin:
+        if site_of(full) != self.site:
             raise ValueError("off-site navigation is not allowed")
         return full
 
@@ -171,12 +195,26 @@ class Session:
             return []
 
     async def screenshot(self, quality: int = 55) -> bytes:
-        return await self.page.screenshot(type="jpeg", quality=quality, timeout=15000)
+        """JPEG of the viewport; b"" if the page cannot be captured at all (never raises)."""
+        try:
+            return await self.page.screenshot(type="jpeg", quality=quality, timeout=8000, animations="disabled")
+        except PWError:
+            # Playwright waits for web fonts first, which can hang on slow networks; CDP grabs what is painted now
+            try:
+                cdp = await self.context.new_cdp_session(self.page)
+                data = await cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": quality})
+                await cdp.detach()
+                return base64.b64decode(data["data"])
+            except Exception:  # noqa: BLE001
+                return b""
 
     async def som_screenshot(self) -> bytes:
         await self._eval(SOM_ON_JS)
         try:
-            return await self.screenshot(quality=70)
+            jpg = await self.screenshot(quality=70)
+            if not jpg:
+                raise ValueError("screenshot failed")
+            return jpg
         finally:
             try:
                 await self._eval(SOM_OFF_JS)
@@ -201,7 +239,7 @@ class Session:
             return "the element is not visible"
         if "Timeout" in m:
             return "could not interact with it (timed out)"
-        if "not allowed" in m:
+        if "not allowed" in m or '"fill"' in m or "needs" in m:
             return str(e)
         return m.split("\n")[0][:140]
 
@@ -214,15 +252,28 @@ class Session:
         try:
             kind = a.action
             if kind in ("click", "type", "select", "tamper", "repeat") and loc is None:
-                raise ValueError("this action needs a target element id")
+                raise ValueError(f'"{kind}" needs "target": <element id>. To fill several fields use '
+                                 '{"action":"fill","fields":[{"target":ID,"value":"..."}]}')
             if kind == "click":
+                res.validation = await self._blocked_submit(loc, enter=False)
                 await loc.click(timeout=3500)
             elif kind == "type":
                 text = a.value or ""
                 submit = text.endswith("\n")
-                await loc.fill(text.rstrip("\n"), timeout=3500)
+                await self._fill_one(loc, text.rstrip("\n"))
                 if submit:
+                    res.validation = await self._blocked_submit(loc, enter=True)
                     await loc.press("Enter")
+                    res.kind = "click"           # Enter submits: measure the effect like a click
+            elif kind == "fill":
+                for f in a.fields[:15]:
+                    try:
+                        await self._fill_one(self.page.locator(f'[data-sim-id="{f["target"]}"]').first, str(f.get("value", "")))
+                        res.filled += 1
+                    except (PWError, ValueError, KeyError) as e:
+                        res.fill_errors.append(f"[{f.get('target')}] {self._human_error(e)}")
+                if not res.filled:
+                    raise ValueError("no field could be filled: " + "; ".join(res.fill_errors)[:200])
             elif kind == "select":
                 try:
                     await loc.select_option(label=a.value, timeout=3000)
@@ -233,7 +284,13 @@ class Session:
                 await self.page.mouse.wheel(0, -dy if (a.value or "").lower().startswith("up") else dy)
                 await asyncio.sleep(0.4)
             elif kind == "back":
-                await self.page.go_back(wait_until="domcontentloaded", timeout=10000)
+                pages = self.context.pages
+                if len(pages) > 1 and await self.page.evaluate("history.length") <= 1:
+                    await self.page.close()             # a popup window has no history: going back means closing it
+                    self.page = self.context.pages[-1]
+                    await self.page.bring_to_front()
+                else:
+                    await self.page.go_back(wait_until="domcontentloaded", timeout=10000)
             elif kind == "goto":
                 await self.page.goto(self.same_site(a.value or "/"), wait_until="domcontentloaded", timeout=20000)
             elif kind == "wait":
@@ -260,11 +317,36 @@ class Session:
             res.error = self._human_error(e)
             return await self._finish(res, before, mark, dlg0)
 
-        if a.action in ("click", "repeat", "goto", "back"):
+        if res.validation:                   # the user sees the browser's bubble: that IS feedback, no rage-clicking
+            await asyncio.sleep(0.5)
+        elif res.kind in ("click", "repeat", "goto", "back"):
             res = await self._watch_effect(res, before, t0, a, loc)
         else:
             await self._settle(max_wait=2.0)
         return await self._finish(res, before, mark, dlg0)
+
+    async def _fill_one(self, loc, value: str):
+        """Type into a text field, pick a <select> option, or tick a checkbox/radio - whatever the control is."""
+        tag, typ = await loc.evaluate("el => [el.tagName.toLowerCase(), (el.type || '').toLowerCase()]")
+        if tag == "select":
+            try:
+                await loc.select_option(label=value, timeout=3000)
+            except PWError:
+                await loc.select_option(value=value, timeout=3000)
+        elif typ in ("checkbox", "radio"):
+            if value.strip().lower() in ("false", "no", "off", "uncheck", "0") and typ == "checkbox":
+                await loc.uncheck(timeout=3000)
+            else:
+                await loc.check(timeout=3000)
+        else:
+            await loc.fill(value, timeout=3500)
+
+    async def _blocked_submit(self, loc, enter: bool) -> list:
+        """If this click/Enter submits a form the browser will refuse (required/invalid fields), return the bubbles it shows."""
+        try:
+            return await loc.evaluate(VALIDATION_JS, enter, timeout=2000) or []
+        except PWError:
+            return []
 
     async def _watch_effect(self, res: ActionResult, before: dict, t0: float, a: ActorOutput, loc) -> ActionResult:
         """Wait up to the persona's patience for a visible reaction; impatient personas click again."""
@@ -307,6 +389,8 @@ class Session:
         after = await self.signature()
         res.url_changed = after.get("url") != before.get("url")
         res.eventually_changed = after != before
+        if res.url_changed and res.validation:   # the form went through after all (e.g. JS-driven submit)
+            res.validation = []
         res.dialogs = self.dialogs[dlg0:]
         new = [r for r in self.net[mark:] if not STATIC_EXT.search(r["url"]) and r["type"] in ("xhr", "fetch", "document", "other")]
         res.requests = [f"{r['method']} {urlparse(r['url']).path} {r['status'] or '?'}" for r in new][:8]

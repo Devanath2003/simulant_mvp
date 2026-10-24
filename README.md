@@ -12,6 +12,11 @@ python serve.py --demo               # UI at http://127.0.0.1:8000 + flawed demo
 python serve.py                      # UI only, to test your own site (it must already be running)
 ```
 
+- `http://127.0.0.1:8000/` — landing page
+- `http://127.0.0.1:8000/app` — dashboard: overview & run history, new simulation, live journeys, report (+ PDF)
+
+The UI is plain HTML/CSS/JS in `frontend/` (no build step) following `DESIGN.md`: `landing.html`, `app.html`, `assets/simulant.css`, `assets/app.js`.
+
 Live progress of every run (goals, each step, findings, final score) is printed in this terminal.
 If the URL cannot be reached, the run is refused with a clear message instead of starting.
 

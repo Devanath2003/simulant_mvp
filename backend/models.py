@@ -43,10 +43,11 @@ class Persona(BaseModel):
 class ActorOutput(BaseModel):
     """What the persona-agent returns every step."""
     thought: str = ""
-    action: Literal["click", "type", "select", "scroll", "back", "goto", "wait",
+    action: Literal["click", "type", "fill", "select", "scroll", "back", "goto", "wait",
                     "tamper", "repeat", "fill_form", "look", "done", "give_up"] = "wait"
     target: Optional[int] = None
     value: Optional[str] = None
+    fields: list[dict] = Field(default_factory=list)   # action=fill: [{"target": id, "value": "..."}, ...]
     confusion: int = 0            # 0-10, how confused the persona is by this screen
     ux_note: str = ""             # concrete issue noticed on this screen, "" if none
     success: Optional[bool] = None  # only meaningful for action=done

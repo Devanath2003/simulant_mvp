@@ -54,11 +54,12 @@ CHAINS: dict[str, list[Model]] = {
         Model("groq", "openai/gpt-oss-20b", tries=2, timeout=40, json_mode=True, extra=GPT_OSS),
     ],
     # looks at screenshots (perceiver + set-of-marks grounder): Gemma first, Nemotron Nano Omni as backup
+    # Gemma's hosted API fails ~half the calls with a fast 500 under load, so Nano Omni comes right after it
     "vision": [
-        Model("gemini", "gemma-4-26b-a4b-it", tries=3, timeout=40),
-        Model("gemini", "gemma-4-31b-it", tries=2, timeout=40),
-        Model("nvidia", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", tries=2, timeout=60,
+        Model("gemini", "gemma-4-26b-a4b-it", tries=3, timeout=25),
+        Model("nvidia", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", tries=2, timeout=40,
               extra=NO_THINK),   # 2s instead of 30s
+        Model("gemini", "gemma-4-31b-it", tries=1, timeout=25),
     ],
 }
 CHAINS["reporter"] = CHAINS["planner"]
@@ -233,6 +234,8 @@ class LLM:
                         _bad_until[mk] = time.time() + 45
                     status = _status_of(e)
                     errors.append(f"{mk}: {type(e).__name__} {status or ''} {str(e)[:90]}")
+                    st = STATS[mk]
+                    st["samples"] = (st.get("samples", []) + [f"{time.time() - t0:.0f}s {str(e)[:160]}"])[-3:]
                     ERRORS.append(errors[-1])
                     del ERRORS[:-40]
                     if status == 429:

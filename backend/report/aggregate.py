@@ -139,8 +139,10 @@ async def build_report(run, results: list[dict]) -> dict:
         steps = [e for e in run.events if e.get("persona") == r["persona"] and e["type"] == "action"]
         journeys.append({"persona": r["persona"], "status": r["status"], "reason": r.get("reason", ""), "goal": r.get("goal", ""),
                          "steps": r.get("steps", 0), "frustration": r.get("frustration", 0),
-                         "timeline": [{"step": e["step"], "desc": e["desc"], "result": e["result"], "frustration": e["frustration"]} for e in steps]})
+                         "timeline": [{"step": e["step"], "desc": e["desc"], "result": e["result"], "frustration": e["frustration"],
+                                       "agent_error": bool(e.get("agent_error"))} for e in steps]})
     return {"run_id": run.id, "url": run.url, "elapsed_s": round(time.time() - run.t0, 1), "score": sc,
             "summary": nar.get("summary", ""), "release_advice": nar.get("release_advice", ""), "top_risks": nar.get("top_risks", []),
             "findings": deduped, "journeys": journeys,
-            "llm_usage": {k: {"calls": v["calls"], "fails": v["fails"], "errors": v.get("errors", {})} for k, v in STATS.items()}}
+            "llm_usage": {k: {"calls": v["calls"], "fails": v["fails"], "errors": v.get("errors", {}),
+                                "recent_errors": v.get("samples", [])} for k, v in STATS.items()}}

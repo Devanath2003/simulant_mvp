@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulant — simulated beta users for your website</title>
+<meta name="description" content="Simulant sends AI personas through your website in a real browser and returns a liability report of everything that confused, slowed or could be exploited.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/simulant.css">
+<style>
+  .announce .wrap { justify-content: space-between; }
+  .announce .msg { display: inline-flex; gap: 10px; align-items: center; min-width: 0; }
+  .announce .msg .dot { background: var(--coral); }
+  .nav-links { margin: 0 auto; }
+  .nav .actions { margin-left: 0; }
+
+  /* hero: centred, one ambient wash behind the headline */
+  .hero { position: relative; padding: 96px 0 0; text-align: center; overflow: hidden; }
+  .hero .wrap { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; }
+  .hero-wash { position: absolute; left: 50%; top: 52%; width: 760px; height: 400px; transform: translate(-50%, -50%); border-radius: 50%;
+               background: linear-gradient(110deg, var(--coral), var(--gold) 45%, var(--sky)); filter: blur(80px); opacity: .32; pointer-events: none; }
+  .overline { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--ash); border-radius: var(--r-pill); padding: 6px 16px;
+              font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--graphite); background: color-mix(in srgb, var(--parchment) 70%, transparent); }
+  .overline .dot { background: var(--lake); }
+  .hero .display { max-width: 1080px; margin: 28px auto 0; }
+  .hero .display em { font-style: italic; }
+  .hero .lead { margin: 28px auto 44px; max-width: 780px; }
+  .hero .row { justify-content: center; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); width: 100%; max-width: 920px; margin-top: 72px; border-top: 1px solid var(--ash); text-align: left; }
+  .metrics div { padding: 22px 20px 0 0; }
+  .metrics div + div { padding-left: 20px; border-left: 1px solid var(--ash); }
+  .metrics .label { display: block; font-size: 11px; }
+  .metrics b { display: block; font: 500 28px/1 var(--mono); letter-spacing: -0.04em; margin-top: 12px; }
+  .metrics-note { font-size: 11px; color: var(--smoke); text-transform: uppercase; margin-top: 22px; letter-spacing: .04em; }
+
+  .sec { padding-top: 128px; }
+  .sec h2 { max-width: 980px; margin: 0 0 40px; }
+
+  /* figure 1: pipeline */
+  .pipeline svg { width: 100%; height: auto; display: block; position: relative; z-index: 1; }
+  .pipeline .node rect { fill: var(--parchment); stroke: var(--ash); }
+  .pipeline .node.dark rect { fill: var(--off-black); stroke: var(--off-black); }
+  .pipeline .node text { font: 400 14px var(--mono); fill: var(--off-black); text-transform: uppercase; letter-spacing: -0.2px; }
+  .pipeline .node.dark text { fill: var(--parchment); }
+  .pipeline .wire { fill: none; stroke: var(--ash); stroke-width: 1.2; }
+  .pipeline .flow { fill: none; stroke: var(--off-black); stroke-width: 1.2; stroke-dasharray: 3 14; animation: flow 2.6s linear infinite; opacity: .55; }
+  @keyframes flow { to { stroke-dashoffset: -34; } }
+  .pipeline .colhead { font: 400 11px var(--mono); fill: var(--smoke); text-transform: uppercase; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 16px; }
+  .steps div { padding: 32px 28px 0 0; }
+  .steps div + div { padding-left: 28px; border-left: 1px solid var(--ash); }
+  .steps .k { font-size: 12px; color: var(--smoke); }
+  .steps h3 { font-size: 28px; margin: 12px 0 10px; }
+  .steps p { color: var(--graphite); font-size: 14px; margin: 0; }
+
+  /* personas */
+  .persona-card { display: grid; gap: 22px; align-content: start; }
+  .persona-card .who { display: flex; gap: 14px; align-items: center; }
+  .persona-card blockquote { margin: 0; font: italic 400 22px/1.25 var(--serif); letter-spacing: -0.015em; border-top: 1px solid var(--ash); padding-top: 20px; }
+  .persona-card cite { display: block; font: 400 12px var(--mono); color: var(--smoke); font-style: normal; text-transform: uppercase; margin-top: 12px; }
+  .transcript { display: grid; grid-template-columns: 1.25fr 1fr; gap: 48px; align-items: center; }
+  .transcript .steps-t { display: grid; gap: 0; }
+  .transcript .st { display: grid; grid-template-columns: 44px 1fr; gap: 10px; font-size: 14px; padding: 14px 0; border-top: 1px solid var(--ash); }
+  .transcript .st:first-child { border-top: 0; }
+  .transcript .st .n { color: var(--smoke); }
+  .transcript .st .r { color: var(--smoke); display: block; margin-top: 4px; font-size: 13px; }
+  .transcript .think { font: italic 400 34px/1.2 var(--serif); letter-spacing: -0.02em; margin: 14px 0 0; }
+  .typing::after { content: "▍"; animation: pulse 1s infinite; margin-left: 2px; font-style: normal; font-size: 24px; }
+
+  /* engines */
+  .engine { position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  .engine .content { position: relative; z-index: 1; max-width: 580px; flex: 1; }
+  .engine h3 { font-size: 40px; margin: 14px 0; }
+  .engine .art { position: absolute; right: -40px; top: -60px; width: 340px; height: 340px; pointer-events: none; opacity: .8; transform: scale(.62); transform-origin: top right; }
+  .engine .art i { position: absolute; border-radius: 50%; mix-blend-mode: multiply; opacity: .75; filter: blur(1px); }
+  .checklist { list-style: none; padding: 0; margin: 20px 0 0; display: grid; }
+  .checklist li { padding: 12px 0; border-top: 1px solid color-mix(in srgb, var(--off-black) 14%, transparent); display: grid; grid-template-columns: 112px 1fr; gap: 16px; font-size: 14px; }
+  .checklist li span:first-child { font-size: 11px; text-transform: uppercase; padding-top: 2px; }
+  .card-peri .checklist li span:first-child { color: #3d4a6b; }
+  .card-clay .checklist li span:first-child { color: var(--clay-ink); }
+  .card-clay .note { color: var(--clay-ink); font-size: 13px; margin: 20px 0 0; }
+
+  /* figure 3: specimen finding */
+  .spec-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; text-transform: uppercase; color: var(--smoke);
+               padding-bottom: 20px; border-bottom: 1px solid var(--ash); }
+  .spec-head .where { margin-left: auto; text-transform: none; }
+  .specimen h3 { font-size: clamp(30px, 3vw, 40px); margin: 28px 0 32px; }
+  .spec-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+  .spec-cols .label { display: block; margin-bottom: 12px; font-size: 11px; }
+  .trace { background: var(--parchment-2); border: 1px solid var(--ash); border-radius: 16px; padding: 6px 20px; font-size: 13px; }
+  .trace div { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 12px 0; border-top: 1px dashed var(--ash); }
+  .trace div:first-child { border-top: 0; }
+  .trace dt { color: var(--smoke); text-transform: uppercase; font-size: 11px; padding-top: 2px; } .trace dd { margin: 0; }
+  .trace .hit dd { color: var(--sev-critical); }
+  .fixbox { margin-top: 16px; border-radius: 16px; padding: 18px 20px; background: color-mix(in srgb, var(--good-track) 60%, var(--parchment)); font-size: 14px; }
+  .fixbox .label { color: var(--good-ink); margin-bottom: 8px; }
+  .spec-quote { font: italic 400 30px/1.2 var(--serif); letter-spacing: -0.02em; margin: 0; }
+  .spec-quote cite { display: block; font: 400 12px var(--mono); font-style: normal; color: var(--smoke); text-transform: uppercase; margin-top: 14px; }
+  .sources { margin-top: 36px; display: grid; }
+  .sources div { display: grid; grid-template-columns: 120px 1fr; gap: 16px; padding: 12px 0; border-top: 1px solid var(--ash); font-size: 13px; color: var(--graphite); }
+  .sources div span:first-child { color: var(--off-black); text-transform: uppercase; font-size: 11px; padding-top: 2px; }
+
+  .faq { border-top: 1px solid var(--ash); }
+
+  .cta { position: relative; overflow: hidden; text-align: center; padding: 96px 40px; }
+  .cta h2 { font-size: clamp(40px, 5vw, 72px); max-width: 980px; margin: 0 auto 32px; }
+  footer { margin-top: 112px; border-top: 1px solid var(--ash); padding: 32px 0 48px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; font-size: 12px; color: var(--smoke); text-transform: uppercase; letter-spacing: .03em; }
+  footer nav { display: flex; gap: 24px; flex-wrap: wrap; }
+  footer a { text-decoration: none; color: var(--graphite); } footer a:hover { color: var(--off-black); }
+
+  @media (max-width: 1000px) {
+    .hero { padding-top: 64px; }
+    .metrics, .steps { grid-template-columns: 1fr 1fr; }
+    .metrics div:nth-child(3), .steps div:nth-child(3) { border-left: 0; padding-left: 0; }
+    .transcript, .spec-cols { grid-template-columns: 1fr; gap: 32px; }
+    .spec-head .where { margin-left: 0; }
+          .nav .actions .btn:not(.btn-blue) { display: none; }
+    .nav .actions { margin-left: auto; }
+    .announce .msg span:last-child { font-size: 12px; }
+    .announce .pill-btn { display: none; }
+    .sec { padding-top: 88px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="announce"><div class="wrap">
+  <span class="msg"><span class="dot"></span><span>Simulant MVP — three simulated beta users, running in real browsers</span></span>
+  <a class="pill-btn" href="/app">Open dashboard →</a>
+</div></div>
+
+<nav class="nav"><div class="wrap">
+  <a class="brand" href="/"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="12" r="8.2" fill="none" stroke="#242424" stroke-width="1.4"/><circle cx="15.2" cy="12" r="4.2" fill="#242424"/></svg>simulant</a>
+  <div class="nav-links">
+    <a href="#how">How it works</a><a href="#personas">Personas</a><a href="#engines">Engines</a><a href="#evidence">Evidence</a><a href="#faq">FAQ</a>
+  </div>
+  <div class="actions">
+    <a class="btn btn-sm" id="sampleLink" href="/app">Sample report</a>
+    <a class="btn btn-sm btn-blue arrow" href="/app#/new">Run a simulation</a>
+  </div>
+</div></nav>
+
+<header class="hero">
+  <div class="hero-wash" aria-hidden="true"></div>
+  <div class="wrap">
+    <span class="overline"><span class="dot"></span>Pre-release testing with simulated beta users</span>
+    <h1 class="display">Meet your first users <em>before</em> they meet your bugs.</h1>
+    <p class="lead">Simulant sends AI personas through your website in a real browser, each with its own device, network and patience. They try to get real tasks done, and you get a report of where they got confused, slowed down or found a loophole, with the evidence for every finding.</p>
+    <div class="row">
+      <a class="btn btn-blue arrow" href="/app#/new">Run a simulation</a>
+      <a class="btn" href="#evidence">See what a finding looks like</a>
+    </div>
+    <div class="metrics">
+      <div><span class="label">Planted bugs caught</span><b>8 of 10</b></div>
+      <div><span class="label">Personas per run</span><b>3, parallel</b></div>
+      <div><span class="label">Full run + report</span><b>~85 s</b></div>
+      <div><span class="label">Test scripts written</span><b>0</b></div>
+    </div>
+    <div class="metrics-note">Measured on our own runs, October 2026. Not projections.</div>
+  </div>
+</header>
+
+<section class="sec" id="how"><div class="wrap">
+  <div class="sec-head"><span>[ 01 / How it works ]</span><span>Figure 1 — one run, end to end</span></div>
+  <h2 class="h-lg">From a URL to a liability report, without writing a single test.</h2>
+  <figure class="figure pipeline" style="margin:0">
+    <div class="wash c" style="width:380px;height:380px;left:52%;top:20px;transform:translateX(-50%);opacity:.5"></div>
+    <div class="fig-body">
+      <svg viewBox="0 0 1200 420" role="img" aria-label="Pipeline: a product URL and a task feed three personas; the novice and commuter run through the Empathy Engine, the deal-hunter through the Integrity Engine; both produce a liability report">
+        <text class="colhead" x="20" y="24">Input</text><text class="colhead" x="330" y="24">Simulated users</text>
+        <text class="colhead" x="720" y="24">Engines</text><text class="colhead" x="980" y="24">Output</text>
+        <g id="wires"></g>
+        <g id="nodes"></g>
+      </svg>
+    </div>
+    <figcaption class="fig-foot"><span>Each persona: own browser · device · zoom · network</span><span>All three run at the same time</span></figcaption>
+  </figure>
+  <div class="steps">
+    <div><span class="k">01 — Observe</span><h3>Reads the page like a person</h3><p>Every screen becomes a numbered list of what can be clicked, typed or chosen, the text actually on screen, and a screenshot.</p></div>
+    <div><span class="k">02 — Decide</span><h3>Thinks in character</h3><p>The persona's brain picks one action, in its own voice, within its limits — a senior avoids unlabeled icons, a commuter skims.</p></div>
+    <div><span class="k">03 — Act</span><h3>Uses a real browser</h3><p>Playwright clicks and fills for real, then times whether anything visibly changed before the persona's patience ran out.</p></div>
+    <div><span class="k">04 — Feel</span><h3>Gets frustrated, and leaves</h3><p>Confusion, silence after a click and vague errors raise frustration. Past the threshold the persona quits — that is your drop-off.</p></div>
+  </div>
+</div></section>
+
+<section class="sec" id="personas"><div class="wrap">
+  <div class="sec-head"><span>[ 02 / Simulated users ]</span><span>Three personas · three bodies · three temperaments</span></div>
+  <h2 class="h-lg">Three people who will never write you a polite bug report.</h2>
+  <div class="grid-3">
+    <article class="card persona-card">
+      <div class="who"><div class="avatar av-senior">R</div><div><h3 style="margin:0">Ravi, 62</h3><div class="label">First-time online shopper</div></div></div>
+      <p style="margin:0">Retired bank clerk. Reads every word, distrusts jargon, never clicks an icon he can't name, and needs an error to say exactly what to fix.</p>
+      <dl class="spec"><dt>Device</dt><dd>Desktop · 140% browser zoom</dd><dt>Network</dt><dd>Normal</dd><dt>Patience</dt><dd>7 s before he suspects it's broken</dd><dt>Gives up</dt><dd>At frustration 80 / 100</dd></dl>
+      <blockquote>“I must change the email because it already exists, then try signing up again.”<cite>Ravi · sign-up flow, automationexercise.com</cite></blockquote>
+    </article>
+    <article class="card persona-card">
+      <div class="who"><div class="avatar av-mobile_3g">P</div><div><h3 style="margin:0">Priya, 27</h3><div class="label">Commuter on a phone</div></div></div>
+      <p style="margin:0">Shops one-thumbed on a crowded train. Skims, expects checkout to be instant, and taps again whenever nothing seems to happen.</p>
+      <dl class="spec"><dt>Device</dt><dd>iPhone 13 · touch</dd><dt>Network</dt><dd>Throttled 3G · 400 ms round trip</dd><dt>Patience</dt><dd>2 s, then she re-taps — up to 3 times</dd><dt>Gives up</dt><dd>At frustration 70 / 100</dd></dl>
+      <blockquote>“Need to finish checkout, click Proceed to PG again.”<cite>Priya · pay button with no loading state — sent duplicate orders</cite></blockquote>
+    </article>
+    <article class="card persona-card">
+      <div class="who"><div class="avatar av-deal_hunter">D</div><div><h3 style="margin:0">The Deal-Hunter</h3><div class="label">Opportunistic user</div></div></div>
+      <p style="margin:0">Completes a normal purchase to learn the baseline price — then tries every trick a real opportunist would, one at a time, and compares the totals.</p>
+      <dl class="spec"><dt>Device</dt><dd>Desktop</dd><dt>Extra moves</dt><dd>Edit hidden fields · rapid repeat clicks · jump straight to any URL</dd><dt>Scope</dt><dd>Only sites you're authorised to test, never off-site</dd><dt>Gives up</dt><dd>Never</dd></dl>
+      <blockquote>“Try skipping payment by going straight to order success page.”<cite>Deal-Hunter · finding: order confirmed without payment</cite></blockquote>
+    </article>
+  </div>
+
+  <figure class="figure" style="margin:16px 0 0">
+    <div class="fig-body transcript">
+      <div class="steps-t">
+        <div class="st"><span class="n">#01</span><span>click “Signup / Login”<span class="r">→ new page after 1.4 s</span></span></div>
+        <div class="st"><span class="n">#05</span><span>fill 11 fields — password, date of birth, address…<span class="r">→ filled, not submitted yet</span></span></div>
+        <div class="st"><span class="n">#06</span><span>click “Create Account”<span class="r">→ page changed after 3.1 s — /account_created</span></span></div>
+      </div>
+      <div>
+        <div class="row" style="gap:12px"><span class="avatar sm av-mobile_3g">P</span><span class="label">Priya, thinking at step 06</span></div>
+        <p class="think typing">“Finally see success, just need to finish quickly.”</p>
+      </div>
+    </div>
+    <figcaption class="fig-foot"><span>Figure 2 — real transcript · automationexercise.com sign-up</span><span>iPhone 13 · slow 3G · account created</span></figcaption>
+  </figure>
+</div></section>
+
+<section class="sec" id="engines"><div class="wrap">
+  <div class="sec-head"><span>[ 03 / Engines ]</span><span>Friction and misuse · tested in the same run</span></div>
+  <h2 class="h-lg">One engine finds where people get stuck. The other finds where money leaks.</h2>
+  <div class="grid-2">
+    <article class="card card-peri engine">
+      <div class="art" aria-hidden="true">
+        <i style="width:220px;height:220px;left:30px;top:60px;background:var(--coral)"></i>
+        <i style="width:200px;height:200px;left:130px;top:20px;background:var(--sky)"></i>
+        <i style="width:170px;height:170px;left:110px;top:150px;background:var(--mint)"></i>
+      </div>
+      <div class="content">
+        <div class="label" style="color:#3d4a6b">Empathy engine</div>
+        <h3>Where real people get stuck.</h3>
+        <p>Runs the novice and the commuter. Half of what it reports is measured by the browser itself, so it holds up when a developer pushes back.</p>
+        <ul class="checklist">
+          <li><span>Measured</span><span>Clicks with no visible response, timed against each persona's patience</span></li>
+          <li><span>Measured</span><span>Buttons covered by banners and pop-ups, disabled controls, blocked form submits</span></li>
+          <li><span>Measured</span><span>Contrast, missing labels and alt text, tiny tap targets, sideways scrolling</span></li>
+          <li><span>Measured</span><span>Slow pages and slow responses on the persona's own network</span></li>
+          <li><span>AI-observed</span><span>A vision model reviews every new screen through the persona's eyes</span></li>
+        </ul>
+      </div>
+      <div class="card-foot"><span>Personas: Ravi · Priya</span><span>Scores usability · accessibility · performance</span></div>
+    </article>
+    <article class="card card-clay engine">
+      <div class="content">
+        <div class="label">Integrity engine</div>
+        <h3>Where your business logic leaks.</h3>
+        <p>Runs the Deal-Hunter. Each abuse is attempted for real, then a strict judge compares the page before and after — and only reports a violation with concrete evidence.</p>
+        <ul class="checklist">
+          <li><span>Coupons</span><span>The same code twice, several codes stacked</span></li>
+          <li><span>Quantities</span><span>Zero, negative and absurd quantities</span></li>
+          <li><span>Prices</span><span>Hidden or read-only price fields edited in the browser</span></li>
+          <li><span>Flow</span><span>Jumping straight to the confirmation page without paying</span></li>
+          <li><span>Repeats</span><span>Double-submitting payment, submitting again after going back</span></li>
+        </ul>
+        <p class="note">Runs only after you confirm you own or are authorised to test the site, and never leaves that site.</p>
+      </div>
+      <div class="card-foot"><span>Persona: the Deal-Hunter</span><span>Scores integrity · functional</span></div>
+    </article>
+  </div>
+</div></section>
+
+<section class="sec" id="evidence"><div class="wrap">
+  <div class="sec-head"><span>[ 04 / Evidence ]</span><span>Specimen — one finding from a run on our test shop</span></div>
+  <h2 class="h-lg">Every finding arrives with its evidence.</h2>
+  <figure class="figure specimen" style="margin:0" aria-label="Example finding">
+    <div class="fig-body">
+      <div class="spec-head"><span class="sev-badge sev-critical"><span class="dot"></span>Critical</span><span>Integrity · Rule check · Deal-Hunter</span><span class="where">/success</span></div>
+      <h3>Order confirmation shown without payment.</h3>
+      <div class="spec-cols">
+        <div>
+          <span class="label">What the judge compared</span>
+          <dl class="trace" style="margin:0">
+            <div><dt>Action</dt><dd>goto /success</dd></div>
+            <div><dt>Before</dt><dd>checkout · amount payable ₹499.0</dd></div>
+            <div><dt>After</dt><dd>“Thank you! Your order is confirmed.”</dd></div>
+            <div class="hit"><dt>Network</dt><dd>no payment request was ever made</dd></div>
+          </dl>
+          <div class="fixbox"><span class="label" style="display:block">Suggested fix</span>Render the confirmation only for an order that exists and has been paid, server-side.</div>
+        </div>
+        <div>
+          <span class="label">In their words</span>
+          <p class="spec-quote">“Try skipping payment by going straight to order success page.”<cite>The Deal-Hunter · attack: skip a step</cite></p>
+          <div class="sources">
+            <div><span>Measured</span><span>Deterministic browser checks — timing, overlays, contrast, failed requests</span></div>
+            <div><span>Rule check</span><span>Business-rule judge, with before / after evidence</span></div>
+            <div><span>AI-observed</span><span>Vision opinion — capped at medium unless two personas agree</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption class="fig-foot"><span>Each finding: screenshot · step · persona · source · fix</span><span>Merged across personas · exported as PDF</span></figcaption>
+  </figure>
+</div></section>
+
+<section class="sec" id="faq"><div class="wrap">
+  <div class="sec-head"><span>[ 05 / FAQ ]</span><span>Five questions developers ask first</span></div>
+  <h2 class="h-lg">Before you point it at your site.</h2>
+  <div class="faq">
+    <details><summary>Do I need to write test scripts or selectors?</summary><p>No. You give a URL and a task in plain English. Each persona plans its own path, finds elements by what they say on screen, and fills whole forms in a single step — names, dates, dropdowns, checkboxes.</p></details>
+    <details><summary>Is this just an LLM's opinion of my site?</summary><p>No. Most findings are measured by the browser: response timing against a persona's patience, overlays blocking clicks, contrast ratios, missing labels, failed requests, duplicate submissions. AI-observed findings are labelled as such, capped at medium severity unless confirmed by a second persona, and count half towards the score.</p></details>
+    <details><summary>Can I point it at my production site?</summary><p>The Empathy Engine behaves like a normal visitor, so yes. The Integrity Engine deliberately tries to abuse business rules, so it only runs after you confirm you own or are authorised to test the site — use staging for it.</p></details>
+    <details><summary>What do I get at the end?</summary><p>A liability report: a score per vital, an executive summary with a ship / fix-first verdict, every persona's step-by-step journey, and the deduplicated findings with screenshots and fixes. Each run is saved, can be replayed in the dashboard, and is exported as a PDF.</p></details>
+    <details><summary>How long does a run take?</summary><p>About one and a half minutes for three personas on a typical sign-up or checkout flow, because they run in parallel.</p></details>
+  </div>
+</div></section>
+
+<section class="sec"><div class="wrap">
+  <div class="card cta">
+    <div class="wash a" style="width:520px;height:520px;left:-120px;top:-180px;opacity:.45"></div>
+    <div class="wash b" style="width:520px;height:520px;right:-120px;bottom:-220px;opacity:.5"></div>
+    <div style="position:relative">
+      <h2>Put three strangers in front of your product tonight.</h2>
+      <div class="row" style="justify-content:center"><a class="btn btn-blue arrow" href="/app#/new">Run a simulation</a><a class="btn" href="/app">Open dashboard</a></div>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <span>Simulant · Team Glitched Inn, College of Engineering Karunagappally · YIP K-DISC</span>
+  <nav><a href="#how">Pipeline</a><a href="#evidence">Evidence</a><a href="/app">Dashboard</a></nav>
+</div></footer>
+
+<script>
+// pipeline diagram: pill nodes + curved hairlines (drawn in JS so positions stay in one place)
+const NODES = {
+  url:   {x: 20,  y: 118, w: 230, t: "Product URL"},
+  task:  {x: 20,  y: 258, w: 230, t: "Task in plain English"},
+  ravi:  {x: 330, y: 58,  w: 280, t: "Ravi · first-time shopper", dot: "var(--gold)"},
+  priya: {x: 330, y: 188, w: 280, t: "Priya · 3G commuter", dot: "var(--sky)"},
+  deal:  {x: 330, y: 318, w: 280, t: "Deal-Hunter · opportunist", dot: "var(--coral)"},
+  emp:   {x: 700, y: 118, w: 210, t: "Empathy engine"},
+  integ: {x: 700, y: 258, w: 210, t: "Integrity engine"},
+  rep:   {x: 980, y: 188, w: 200, t: "Liability report", dark: true},
+};
+const EDGES = [["url","ravi"],["url","priya"],["url","deal"],["task","ravi"],["task","priya"],["task","deal"],
+               ["ravi","emp"],["priya","emp"],["deal","integ"],["emp","rep"],["integ","rep"]];
+const NS = "http://www.w3.org/2000/svg", H = 44;
+const el = (n, a) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+const wires = document.getElementById("wires"), nodes = document.getElementById("nodes");
+EDGES.forEach(([a, b], i) => {
+  const A = NODES[a], B = NODES[b], x1 = A.x + A.w, y1 = A.y + H / 2, x2 = B.x, y2 = B.y + H / 2, dx = (x2 - x1) * 0.5;
+  const d = `M${x1} ${y1} C${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+  wires.appendChild(el("path", {d, class: "wire"}));
+  const f = el("path", {d, class: "flow"}); f.style.animationDelay = (-i * 0.37) + "s"; wires.appendChild(f);
+});
+for (const k in NODES) {
+  const n = NODES[k], g = el("g", {class: "node" + (n.dark ? " dark" : "")});
+  g.appendChild(el("rect", {x: n.x, y: n.y, width: n.w, height: H, rx: H / 2}));
+  if (n.dot) { const c = el("circle", {cx: n.x + 24, cy: n.y + H / 2, r: 5}); c.style.fill = n.dot; g.appendChild(c); }
+  const t = el("text", {x: n.x + (n.dot ? 40 : n.w / 2), y: n.y + 27, "text-anchor": n.dot ? "start" : "middle"});
+  t.textContent = n.t.toUpperCase(); g.appendChild(t); nodes.appendChild(g);
+}
+// point "Sample report" at the latest finished run, if there is one
+fetch("/api/runs").then(r => r.json()).then(rs => { const d = rs.find(r => r.status === "done"); if (d) document.getElementById("sampleLink").href = "/app#/run/" + d.run_id + "/report"; }).catch(() => {});
+</script>
+</body>
+</html>

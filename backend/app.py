@@ -1,6 +1,7 @@
 """FastAPI server: REST to start/list runs, WebSocket to stream a run, static UI."""
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,7 +15,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from playwright.async_api import async_playwright
+
 from backend.config import RUNS_DIR, ROOT
+from backend.report.pdf import write_pdf
 from backend.runner import Run, execute_run, load_personas
 
 RUNS_DIR.mkdir(exist_ok=True)
@@ -30,14 +34,24 @@ class StartReq(BaseModel):
     authorized: bool = False     # tester confirms they own / may test the site (required for the integrity persona)
 
 
+app.mount("/assets", StaticFiles(directory=ROOT / "frontend" / "assets"), name="assets")
+
+
 @app.get("/")
-def index():
-    return FileResponse(ROOT / "frontend" / "index.html")
+def landing():
+    return FileResponse(ROOT / "frontend" / "landing.html")
+
+
+@app.get("/app")
+def dashboard():
+    return FileResponse(ROOT / "frontend" / "app.html")
 
 
 @app.get("/api/personas")
 def personas():
-    return [{"id": p.id, "name": p.name, "engine": p.engine, "description": p.description} for p in load_personas().values()]
+    return [{"id": p.id, "name": p.name, "engine": p.engine, "description": p.description, "device": p.device,
+             "network": p.network, "patience_s": p.patience_s, "abandon_at": p.abandon_at, "zoom": p.zoom,
+             "rage_click": p.rage_click, "max_steps": p.max_steps} for p in load_personas().values()]
 
 
 @app.post("/api/runs")
@@ -71,18 +85,61 @@ def _disk_events(run_id: str) -> list[dict]:
     return [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _run_summary(d) -> dict | None:
+    """One row of the dashboard's run history, built from the files every run leaves behind."""
+    ev_file = d / "events.jsonl"
+    if not (d.is_dir() and ev_file.exists()):
+        return None
+    with ev_file.open(encoding="utf-8") as fh:
+        first = json.loads(fh.readline() or "{}")
+    info = {"run_id": d.name, "url": first.get("url", ""), "goal": first.get("goal", ""),
+            "personas": [p["id"] for p in first.get("personas", [])], "status": "failed", "score": None}
+    if d.name in RUNS and RUNS[d.name].status == "running":
+        info["status"] = "running"
+    rep = d / "report.json"
+    if rep.exists():
+        r = json.loads(rep.read_text(encoding="utf-8"))
+        sev = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for f in r["findings"]:
+            sev[f["severity"]] += 1
+        info.update(status="done", score=r["score"]["overall"], vitals=r["score"]["vitals"], findings=len(r["findings"]),
+                    severity=sev, elapsed_s=r.get("elapsed_s"), advice=r.get("release_advice", ""),
+                    outcomes={j["persona"]: j["status"] for j in r["journeys"]})
+    return info
+
+
 @app.get("/api/runs")
 def list_runs():
-    out = []
-    for d in sorted(RUNS_DIR.iterdir(), reverse=True):
-        rep = d / "report.json"
-        if d.is_dir() and (d / "events.jsonl").exists():
-            info = {"run_id": d.name, "done": rep.exists()}
-            if rep.exists():
-                r = json.loads(rep.read_text(encoding="utf-8"))
-                info.update(url=r["url"], score=r["score"]["overall"], findings=len(r["findings"]))
-            out.append(info)
-    return out[:30]
+    rows = [_run_summary(d) for d in sorted(RUNS_DIR.iterdir(), reverse=True)[:60]]
+    return [r for r in rows if r]
+
+
+@app.get("/api/runs/{run_id}/report")
+def run_report(run_id: str):
+    if not re.fullmatch(r"[\w-]+", run_id):
+        raise HTTPException(400, "bad run id")
+    rep = RUNS_DIR / run_id / "report.json"
+    if not rep.exists():
+        raise HTTPException(404, "this run has no report yet")
+    return json.loads(rep.read_text(encoding="utf-8"))
+
+
+@app.get("/api/runs/{run_id}/report.pdf")
+async def report_pdf(run_id: str):
+    if not re.fullmatch(r"[\w-]+", run_id):
+        raise HTTPException(400, "bad run id")
+    run_dir = RUNS_DIR / run_id
+    pdf, rep = run_dir / "report.pdf", run_dir / "report.json"
+    if not pdf.exists():                     # older run, or export failed: build it now
+        if not rep.exists():
+            raise HTTPException(404, "this run has no report yet")
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            try:
+                await write_pdf(browser, json.loads(rep.read_text(encoding="utf-8")), run_dir)
+            finally:
+                await browser.close()
+    return FileResponse(pdf, media_type="application/pdf", filename=f"Simulant_report_{run_id}.pdf")
 
 
 @app.get("/api/runs/{run_id}/events")

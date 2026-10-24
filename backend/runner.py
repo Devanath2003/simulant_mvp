@@ -16,6 +16,7 @@ from backend.navigator import prompts
 from backend.navigator.agent import Ctx, build_graph
 from backend.navigator.browser import Session
 from backend.report.aggregate import build_report
+from backend.report.pdf import write_pdf
 
 PERSONA_DIR = Path(__file__).parent / "personas"
 PERSONA_TIMEOUT_S = 600
@@ -43,7 +44,7 @@ def console_line(ev: dict) -> str | None:
     if t == "thought":
         return f"{head} #{ev['step']:<2} F={ev['frustration']:<3} {ev['action'][:45]:<45} | {ev['thought'][:110]}"
     if t == "action":
-        return f"{'':22s}   -> {ev['result'][:120]}"
+        return f"{'':22s}   -> {'(navigator error, not a site issue) ' if ev.get('agent_error') else ''}{ev['result'][:120]}"
     if t == "finding":
         f = ev["finding"]
         return f"{'':22s}   !! [{SEV_TAG[f['severity']]}] {f['vital']}: {f['title'][:100]}"
@@ -81,7 +82,10 @@ class Run:
         self._log.write(json.dumps(ev, default=str) + "\n")
         self._log.flush()
         if self.console and (line := console_line(ev)):
-            print(line, flush=True)
+            try:
+                print(line, flush=True)
+            except UnicodeEncodeError:       # a cp1252 console must never be able to fail a run
+                print(line.encode("ascii", "replace").decode(), flush=True)
         for q in list(self.subs):
             q.put_nowait(ev)
 
@@ -91,9 +95,21 @@ class Run:
         return q
 
 
+def test_identity(p: Persona, run_id: str) -> dict:
+    """Fake but valid personal data, unique per run so sign-ups never hit 'email already exists'."""
+    first = p.name.split(",")[0].split(" - ")[0].strip()
+    first = first if " " not in first else "Alex"
+    tag = run_id[-4:]
+    born = {"senior": "15 March 1962"}.get(p.id, "8 July 1998")
+    return {"first name": first, "last name": "Tester", "email": f"{first.lower()}.{tag}@example.com",
+            "password": "Simulant#2026", "phone": "9876543210", "date of birth": born, "address": "12 MG Road",
+            "city": "Kochi", "state": "Kerala", "zip/pin code": "682001", "country": "India", "company": "(leave empty)"}
+
+
 async def run_persona(run: Run, pw, browser, persona: Persona) -> dict:
     sess = Session(browser, pw, persona, run.url)
     result = {"persona": persona.id, "status": "error", "reason": "", "steps": 0, "goal": "", "findings": []}
+    ctx = None
     try:
         await sess.start()
         obs = await sess.observe()
@@ -102,12 +118,12 @@ async def run_persona(run: Run, pw, browser, persona: Persona) -> dict:
             def _ok(d):
                 if len(str(d.get("goal", "")).strip()) < 20:
                     raise ValueError("goal missing or echoed the template")
-                if persona.engine == "empathy" and len(d.get("focus") or []) < 4:
+                if persona.engine == "empathy" and not run.goal and len(d.get("focus") or []) < 4:
                     raise ValueError("an empathy goal needs at least 4 ordered steps (a full flow, not just browsing)")
             plan = await llm.json("planner", prompts.PLANNER_SYSTEM, prompts.planner_user(persona, obs, run.goal),
                                   max_tokens=900, validate=_ok)
             goal = str(plan.get("goal") or "").strip()
-            focus = [str(x) for x in (plan.get("focus") or [])][:5]
+            focus = [str(x) for x in (plan.get("focus") or [])][:8]
         except LLMError as e:
             run.emit("log", persona=persona.id, msg="planner failed, using default goal: " + str(e)[:100])
         if not goal:
@@ -116,7 +132,7 @@ async def run_persona(run: Run, pw, browser, persona: Persona) -> dict:
                                 "Buy a product normally, then look for ways to pay less than you should.")
         run.emit("persona_start", persona=persona.id, name=persona.name, engine=persona.engine, goal=goal, focus=focus)
         ctx = Ctx(run_id=run.id, run_dir=run.dir, persona=persona, session=sess, goal=goal, focus=focus,
-                  emit=run.emit, site_url=run.url)
+                  emit=run.emit, site_url=run.url, identity=test_identity(persona, run.id))
         graph = build_graph(ctx)
         final = await asyncio.wait_for(
             graph.ainvoke({"step": 0, "frustration": 0, "status": "running", "history": [], "recent": [], "why": []},
@@ -131,6 +147,8 @@ async def run_persona(run: Run, pw, browser, persona: Persona) -> dict:
         result.update(status="error", reason=f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}")
         run.emit("persona_end", persona=persona.id, status="error", reason=result["reason"])
     finally:
+        if ctx and result["status"] == "error":   # crashed mid-journey: keep what it found and how far it got
+            result.update(findings=ctx.findings, goal=ctx.goal, steps=ctx.stats["steps"])
         await sess.close()
     return result
 
@@ -144,12 +162,17 @@ async def execute_run(run: Run):
             browser = await pw.chromium.launch(headless=os.getenv("HEADED") != "1")
             try:
                 results = await asyncio.gather(*[run_persona(run, pw, browser, p) for p in chosen])
+                if all(r["status"] == "error" for r in results):    # nothing was tested: a report would only show fake 100s
+                    raise RuntimeError("no persona could test the site - " + results[0]["reason"])
+                run.report = await build_report(run, results)
+                (run.dir / "report.json").write_text(json.dumps(run.report, indent=2, default=str), encoding="utf-8")
+                try:
+                    await write_pdf(browser, run.report, run.dir)
+                    run.report["pdf"] = True
+                except Exception as e:  # noqa: BLE001 - the PDF is a convenience, never fail the run for it
+                    run.emit("log", msg=f"PDF export failed: {e}")
             finally:
                 await browser.close()
-        if all(r["status"] == "error" for r in results):    # nothing was tested: a report would only show fake 100s
-            raise RuntimeError("no persona could test the site - " + results[0]["reason"])
-        run.report = await build_report(run, results)
-        (run.dir / "report.json").write_text(json.dumps(run.report, indent=2, default=str), encoding="utf-8")
         run.emit("report", report=run.report)
         run.status = "done"
     except Exception as e:  # noqa: BLE001
