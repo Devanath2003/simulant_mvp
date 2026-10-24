@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
-from backend.llm.gateway import LLMError, llm
+from backend.llm.gateway import LLMError, llm, paid_available
 from backend.models import ActorOutput, Finding, Persona
 from backend.navigator import prompts, sensors
 from backend.navigator.browser import ActionResult, Session
@@ -162,6 +162,23 @@ def describe(a: ActorOutput, obs: dict) -> str:
     return f"{a.action}{t}{v}"
 
 
+EYES_PER_PERSONA = 12
+
+
+def stuck_reason(s: dict) -> str:
+    """Why the last step suggests navigation went wrong (the cheap text-only actor is likely misreading the page)."""
+    recent, last = s.get("recent", []), s.get("last_result", "")
+    if s.get("agent_error"):
+        return "your last action could not be carried out (" + last.replace("FAILED: ", "")[:90] + ")"
+    if "covering" in last:
+        return "your last click was blocked because something on screen is covering that element"
+    if recent and recent[-1][0] in ("click", "repeat") and not recent[-1][3]:
+        return "your last click had no visible effect"
+    if len(recent) >= 3 and all(r[0] == "scroll" for r in recent[-3:]):
+        return "you scrolled 3 times in a row without finding what you need"
+    return ""
+
+
 def path_of(url: str) -> str:
     u = urlparse(url)
     return u.path or "/"
@@ -171,6 +188,7 @@ def path_of(url: str) -> str:
 def build_graph(ctx: Ctx):
     P, sess = ctx.persona, ctx.session
     integrity = P.engine == "integrity"
+    actor_role = "actor_integrity" if integrity else "actor"
 
     # ---------------------------------------------------------------- observe
     async def observe(s: S) -> dict:
@@ -252,17 +270,44 @@ def build_graph(ctx: Ctx):
                 warnings.append(f"You already spent {n} actions on '{k}'. Move on to an idea you have NOT attempted yet, or finish with done.")
         system = prompts.actor_system(P, ctx.goal, ctx.focus, ctx.site_url, ctx.identity)
         user = prompts.actor_user(P, s, obs, warnings, ctx.visited, ctx.goal)
+
+        async def eyes(reason: str):
+            """Vision navigator: a paid multimodal model looks at the numbered screenshot and takes this one step."""
+            jpg = await sess.som_screenshot()
+            d = await llm.json("navigator", system, user + prompts.eyes_note(reason), image=jpg, max_tokens=900)
+            ctx.stats["eyes"] = ctx.stats.get("eyes", 0) + 1
+            ctx.emit("log", persona=P.id, msg=f"vision navigator ({reason[:70]}) -> {d.get('action')} {d.get('target') or ''}")
+            return d, clean_actor(d, integrity, obs)
+
+        used_eyes = False
         try:
-            data = await llm.json("actor", system, user, max_tokens=600)
-            a = clean_actor(data, integrity, obs)
-            ctx.stats["llm_calls"] += 1
-            if a.action == "look":                           # vision grounder (Set-of-Marks) for things the DOM can't describe
-                hint = await ground(ctx, a.value or a.thought, obs)
-                data = await llm.json("actor", system, user + f"\n\nVision helper: {hint}\nNow choose your action.", max_tokens=600)
+            # not for the Deal-Hunter: OpenAI models decline to keep attempting abuses (measured)
+            can_see = not integrity and paid_available() and ctx.stats.get("eyes", 0) < EYES_PER_PERSONA
+            reason = stuck_reason(s) if can_see else ""
+            if reason:                                       # navigation went wrong last step: let the eyes take this one
+                try:
+                    (data, a), used_eyes = await eyes(reason), True
+                except Exception as e:  # noqa: BLE001 - optional helper: any failure falls back to the free actor
+                    ctx.emit("log", persona=P.id, msg=f"vision navigator unavailable: {str(e)[:100]}")
+            if not used_eyes:
+                data = await llm.json(actor_role, system, user, max_tokens=600)
                 a = clean_actor(data, integrity, obs)
-                if a.action == "look":
-                    a = ActorOutput(thought=a.thought, action="wait", value="1")
-                ctx.stats["llm_calls"] += 2
+                ctx.stats["llm_calls"] += 1
+                second_look = ("you asked to look at the screen: " + (a.value or a.thought)[:80] if a.action == "look" else
+                               "you are about to give up - check the screen once more for a way forward you may have missed"
+                               if a.action == "give_up" and not integrity else "")
+                if second_look and can_see:
+                    try:
+                        (data, a), used_eyes = await eyes(second_look), True
+                    except Exception as e:  # noqa: BLE001
+                        ctx.emit("log", persona=P.id, msg=f"vision navigator unavailable: {str(e)[:100]}")
+                if a.action == "look":                       # no paid budget: free vision grounder (Set-of-Marks) + one more actor call
+                    hint = await ground(ctx, a.value or a.thought, obs)
+                    data = await llm.json(actor_role, system, user + f"\n\nVision helper: {hint}\nNow choose your action.", max_tokens=600)
+                    a = clean_actor(data, integrity, obs)
+                    ctx.stats["llm_calls"] += 2
+            if a.action == "look":
+                a = ActorOutput(thought=a.thought, action="wait", value="1")
         except (LLMError, ValueError) as e:
             n = s.get("llm_fail", 0) + 1
             ctx.emit("log", persona=P.id, msg=f"LLM failure {n}/3: {str(e)[:140]}")
@@ -288,7 +333,7 @@ def build_graph(ctx: Ctx):
             why.append(f"confusing screen ({a.ux_note[:60] or a.thought[:60]})")
         upd["frustration"], upd["why"] = fr, why
         ctx.emit("thought", persona=P.id, step=s["step"], thought=a.thought, action=describe(a, obs),
-                 confusion=a.confusion, frustration=fr, memory=upd["memory"])
+                 confusion=a.confusion, frustration=fr, memory=upd["memory"], eyes=used_eyes)
         if a.ux_note.strip() and len(a.ux_note) > 8 and not integrity:
             ctx.add(Finding(persona=P.id, engine=P.engine, vital="usability", severity=SEV_FROM_CONF(a.confusion),
                             source="llm", title=a.ux_note[:110], url=obs["url"], step=s["step"], screenshot=ctx.shot,

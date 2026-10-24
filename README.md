@@ -21,6 +21,16 @@ Live progress of every run (goals, each step, findings, final score) is printed 
 If the URL cannot be reached, the run is refused with a clear message instead of starting.
 
 `.env` needs `GROQ_API_1..n`, `NVIDIA_API_1..n`, `GEMINI_API_1..n` (extra keys are rotated automatically).
+Optional: `OPEN_AI=<key>` turns on the paid helpers below; `OPENAI_MAX_CALLS_PER_RUN` (default 60) caps them per run.
+
+### Paid models (OpenAI), used sparingly
+- **Vision navigator** (`gpt-6-luna`, `gpt-6.1-sol` if luna errors): takes over a single step only when navigation went wrong
+  (navigator error, blocked or no-effect click, 3 scrolls in a row, `look`, or a persona about to give up). It sees a
+  numbered Set-of-Marks screenshot at CSS-pixel scale. Not used for the Deal-Hunter (OpenAI models stop attempting abuses).
+- **Rate-limit stand-in**: when Groq's free tier 429s, `gpt-6-luna` answers the Empathy personas instead of gpt-oss-20b.
+- Never used for: the per-page screenshot review, planner, judge, report.
+- 25 of the per-run calls are reserved for the vision navigator. Token counts and cost per run are in `report.json`
+  (`paid_usage`) and under Run diagnostics in the report. Measured: $0.002-0.02 per three-persona run.
 Terminal-only run: `python scripts/run_cli.py http://127.0.0.1:8001 senior,mobile_3g,deal_hunter`.
 Every run is saved to `runs/<id>/` (events.jsonl, screenshots, report.json) and can be replayed from the UI.
 

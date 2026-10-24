@@ -247,6 +247,8 @@ textarea.input { min-height: 96px; resize: vertical; line-height: 1.4; }
 .timeline { margin-top: 20px; display: grid; gap: 0; font-size: 13px; }
 .timeline .tl { display: grid; grid-template-columns: 40px 1fr 1fr 70px; gap: 16px; padding: 10px 0; border-top: 1px dashed var(--ash); }
 .timeline .tl .n, .timeline .tl .f { color: var(--smoke); } .timeline .tl .f { text-align: right; }
+.eyes { display: inline-block; font-size: 10px; text-transform: uppercase; padding: 1px 7px; border-radius: var(--r-pill);
+        background: var(--peri); color: #3d4a6b; margin-left: 6px; vertical-align: 1px; }
 .diag details { border-top: 1px solid var(--ash); border-bottom: 1px solid var(--ash); padding: 22px 0; }
 .diag summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
 .diag summary::-webkit-details-marker { display: none; }

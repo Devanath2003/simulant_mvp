@@ -247,7 +247,7 @@ function onEvent(S, ev) {
     case "thought":
       $(".now", L.el).classList.remove("waiting");
       $(".now", L.el).textContent = ev.thought + "”";
-      feed(L, `<div class="st"><span class="n">#${String(ev.step).padStart(2, "0")}</span><span>${esc(ev.action)}</span></div>`);
+      feed(L, `<div class="st"><span class="n">#${String(ev.step).padStart(2, "0")}</span><span>${esc(ev.action)}${ev.eyes ? ` <span class="eyes" title="Taken by the vision navigator after navigation went wrong">vision</span>` : ""}</span></div>`);
       setFrustration(L, ev.frustration);
       break;
     case "action":
@@ -288,9 +288,12 @@ function onEvent(S, ev) {
 function diagnostics(r) {
   const errs = r.journeys.flatMap(j => j.timeline.filter(navErr).map(t => ({ ...t, who: short(pName(j.persona)) })));
   const models = Object.entries(r.llm_usage || {}).filter(([, v]) => v.calls);
+  const paid = r.paid_usage || { models: {} };
   if (!errs.length && !models.length) return "";
   return `<section class="diag" style="margin-top:80px"><details>
-    <summary><span class="h-xs serif">Run diagnostics</span><span class="label">Not site issues · not part of the score · ${errs.length} navigator retries</span></summary>
+    <summary><span class="h-xs serif">Run diagnostics</span><span class="label">Not site issues · not part of the score · ${errs.length} navigator retries${paid.navigator_rescues ? ` · ${paid.navigator_rescues} vision steps` : ""}${paid.cost_usd ? ` · OpenAI $${paid.cost_usd.toFixed(4)}` : ""}</span></summary>
+    ${Object.keys(paid.models).length ? `<div class="label" style="margin:24px 0 8px">Paid model usage (this run, as reported by the API)</div>
+      <div class="timeline">${Object.entries(paid.models).map(([k, u]) => `<div class="tl"><span class="n"></span><span>${esc(k)}</span><span class="muted">${u.in.toLocaleString()} tokens in${u.cached ? ` (${u.cached.toLocaleString()} cached)` : ""} · ${u.out.toLocaleString()} out</span><span class="f">$${u.cost_usd.toFixed(4)}</span></div>`).join("")}</div>` : ""}
     ${errs.length ? `<div class="label" style="margin:24px 0 8px">Navigator retries</div>
       <div class="timeline">${errs.map(t => `<div class="tl"><span class="n">#${t.step}</span><span>${esc(t.who)} · ${esc(t.desc)}</span><span class="muted">${esc(t.result.replace(/^FAILED:\s*/, ""))}</span><span class="f"></span></div>`).join("")}</div>` : ""}
     ${models.length ? `<div class="label" style="margin:28px 0 8px">Model calls</div>
@@ -336,7 +339,7 @@ function renderReport(S) {
             <span class="row" style="gap:8px">${statusTag(j.status)}<span class="tag">${j.steps} steps</span><span class="tag">Frustration ${j.frustration}</span></span></summary>
           <p class="graphite" style="margin:18px 0 6px;font-size:14px"><b style="font-weight:500">Goal</b> — ${esc(j.goal)}</p>
           ${j.reason ? `<p class="graphite" style="margin:0;font-size:14px"><b style="font-weight:500">Ended</b> — ${esc(j.reason)}</p>` : ""}
-          <div class="timeline">${j.timeline.filter(t => !navErr(t)).map(t => `<div class="tl"><span class="n">#${t.step}</span><span>${esc(t.desc)}</span><span class="muted">${esc(t.result)}</span><span class="f">F ${t.frustration}</span></div>`).join("")}</div>
+          <div class="timeline">${j.timeline.filter(t => !navErr(t)).map(t => `<div class="tl"><span class="n">#${t.step}</span><span>${esc(t.desc)}${t.eyes ? ` <span class="eyes" title="Taken by the vision navigator">vision</span>` : ""}</span><span class="muted">${esc(t.result)}</span><span class="f">F ${t.frustration}</span></div>`).join("")}</div>
           ${j.timeline.some(navErr) ? `<p class="muted" style="font-size:12px;margin:12px 0 0">${j.timeline.filter(navErr).length} navigator retries hidden: our agent's own mistakes, not the site's. Listed under Run diagnostics.</p>` : ""}
         </details>`; }).join("")}
     </section>

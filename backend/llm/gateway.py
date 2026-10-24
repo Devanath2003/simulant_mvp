@@ -27,7 +27,7 @@ class LLMError(Exception):
 
 @dataclass
 class Model:
-    provider: str            # groq | nvidia | gemini
+    provider: str            # groq | nvidia | gemini | openai
     name: str
     tries: int = 2           # attempts (each on the next key) before falling through to the next model
     timeout: float = 45
@@ -39,10 +39,17 @@ GPT_OSS = dict(reasoning_effort="low")
 # Nemotron reasoning models spend the whole token budget "thinking" on long prompts and return no JSON; thinking off = ~3s, reliable
 NO_THINK = dict(extra_body={"chat_template_kwargs": {"enable_thinking": False}})
 
+# Paid OpenAI models (measured on our stuck-navigation benchmark, Oct 2026: gpt-6-luna 4/4 on unlabelled controls at
+# ~5.5k in / 250 out tokens = $0.0007 per call; text-only gpt-oss 1/4). Used only where free models fall short, under a per-run cap.
+LUNA = Model("openai", "gpt-6-luna", tries=2, timeout=30, json_mode=True, extra=dict(reasoning_effort="low"))
+SOL = Model("openai", "gpt-6.1-sol", tries=1, timeout=45, json_mode=True, extra=dict(reasoning_effort="low"))
+
 CHAINS: dict[str, list[Model]] = {
-    # persona brain: fast, per-step
+    # persona brain: fast, per-step. Groq's free tier allows ~one 5k-token prompt per minute per key, so with three
+    # personas it 429s constantly; Luna answers then instead of the much weaker gpt-oss-20b
     "actor": [
         Model("groq", "openai/gpt-oss-120b", tries=3, timeout=30, json_mode=True, extra=GPT_OSS),
+        LUNA,
         Model("groq", "openai/gpt-oss-20b", tries=2, timeout=30, json_mode=True, extra=GPT_OSS),
         Model("nvidia", "nvidia/nemotron-3-ultra-550b-a55b", tries=2, timeout=60, extra=NO_THINK),
     ],
@@ -62,8 +69,13 @@ CHAINS: dict[str, list[Model]] = {
         Model("gemini", "gemma-4-31b-it", tries=1, timeout=25),
     ],
 }
+# the Deal-Hunter deliberately tries abuses; measured: gpt-6-luna stops after one ("I'll stop rather than submit additional
+# payment-manipulation attempts"), so the integrity persona keeps the open-weight chain, which works through every idea
+CHAINS["actor_integrity"] = [m for m in CHAINS["actor"] if m.provider != "openai"]
 CHAINS["reporter"] = CHAINS["planner"]
 CHAINS["grounder"] = CHAINS["vision"]
+# takes over a step when navigation went wrong: sees the numbered (Set-of-Marks) screenshot and decides in character
+CHAINS["navigator"] = [LUNA, SOL]
 
 
 class KeyPool:
@@ -90,7 +102,26 @@ class KeyPool:
 
 
 POOLS = {p: KeyPool(k) for p, k in KEYS.items()}
+# price per 1M tokens: (input, cached input, output); published rates via third-party listings, Oct 2026
+PRICES = {"gpt-6-luna": (0.10, 0.01, 0.50), "gpt-6.1-sol": (2.00, 0.10, 10.00)}
+PAID = {"openai"}
+# paid calls still allowed in the current run (set by the runner); `reserve` of them is kept for the vision navigator,
+# so rate-limit fallbacks for the actor can never use up the budget meant for rescuing a stuck persona
+BUDGET = {"calls_left": 0, "reserve": 0}
+
+
+def paid_available(role: str = "navigator") -> bool:
+    floor = 0 if role == "navigator" else BUDGET["reserve"]
+    return bool(POOLS["openai"].keys) and BUDGET["calls_left"] > floor
+
+
+def cost_usd(model_key: str, u: dict) -> float:
+    p = PRICES.get(model_key.split("/", 1)[-1])
+    if not p:
+        return 0.0
+    return ((u["in"] - u["cached"]) * p[0] + u["cached"] * p[1] + u["out"] * p[2]) / 1e6
 STATS: dict[str, dict] = {}                       # "provider/model" -> calls/fails/secs
+USAGE: dict[str, dict] = {}                       # "provider/model" -> tokens in / cached / out (what the API reported)
 ERRORS: list[str] = []                            # last failures, for debugging
 _streak: dict[str, int] = {}                      # consecutive failures per model
 _bad_until: dict[str, float] = {}                 # circuit breaker
@@ -162,12 +193,20 @@ async def _call_openai(m: Model, key: str, system: str, user: str, image: Option
     if image:
         content = [{"type": "text", "text": user},
                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(image).decode()}}]
-    kwargs = dict(model=m.name, max_tokens=max_tokens, temperature=0.3,
-                  messages=[{"role": "system", "content": system}, {"role": "user", "content": content}])
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    if m.provider == "openai":   # current OpenAI models: reasoning models, no temperature, max_completion_tokens
+        kwargs = dict(model=m.name, max_completion_tokens=max_tokens, messages=msgs)
+    else:
+        kwargs = dict(model=m.name, max_tokens=max_tokens, temperature=0.3, messages=msgs)
     if m.json_mode:
         kwargs["response_format"] = {"type": "json_object"}
     kwargs.update(m.extra)
     r = await _client(m.provider, key, m.timeout).chat.completions.create(**kwargs)
+    if r.usage:                  # paid models: keep exact token counts so the report can show the real cost
+        u = USAGE.setdefault(f"{m.provider}/{m.name}", {"in": 0, "cached": 0, "out": 0})
+        u["in"] += r.usage.prompt_tokens or 0
+        u["out"] += r.usage.completion_tokens or 0
+        u["cached"] += getattr(getattr(r.usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
     return r.choices[0].message.content or ""
 
 
@@ -213,7 +252,13 @@ class LLM:
             if _bad_until.get(mk, 0) > time.time() and not last:
                 continue
             pool = POOLS[m.provider]
+            if m.provider in PAID and not paid_available(role):
+                continue                           # no key, or this run's paid-call budget is used up
             for _ in range(m.tries):
+                if m.provider in PAID:
+                    if not paid_available(role):
+                        break
+                    BUDGET["calls_left"] -= 1
                 ki, key = pool.next()
                 t0 = time.time()
                 try:

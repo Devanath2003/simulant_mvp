@@ -194,10 +194,12 @@ class Session:
         except PWError:
             return []
 
-    async def screenshot(self, quality: int = 55) -> bytes:
-        """JPEG of the viewport; b"" if the page cannot be captured at all (never raises)."""
+    async def screenshot(self, quality: int = 55, css: bool = False) -> bytes:
+        """JPEG of the viewport; b"" if the page cannot be captured at all (never raises).
+        css=True: one image pixel per CSS pixel (an iPhone frame is 390px wide instead of 1170) - far fewer vision tokens."""
         try:
-            return await self.page.screenshot(type="jpeg", quality=quality, timeout=8000, animations="disabled")
+            return await self.page.screenshot(type="jpeg", quality=quality, timeout=8000, animations="disabled",
+                                              scale="css" if css else "device")
         except PWError:
             # Playwright waits for web fonts first, which can hang on slow networks; CDP grabs what is painted now
             try:
@@ -211,7 +213,7 @@ class Session:
     async def som_screenshot(self) -> bytes:
         await self._eval(SOM_ON_JS)
         try:
-            jpg = await self.screenshot(quality=70)
+            jpg = await self.screenshot(quality=70, css=True)
             if not jpg:
                 raise ValueError("screenshot failed")
             return jpg

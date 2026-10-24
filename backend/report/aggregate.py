@@ -3,7 +3,7 @@ import json
 import re
 import time
 
-from backend.llm.gateway import STATS, LLMError, llm
+from backend.llm.gateway import STATS, USAGE, LLMError, cost_usd, llm
 from backend.models import Finding
 
 SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -137,12 +137,30 @@ async def build_report(run, results: list[dict]) -> dict:
     journeys = []
     for r in results:
         steps = [e for e in run.events if e.get("persona") == r["persona"] and e["type"] == "action"]
+        seen = {e["step"] for e in run.events if e.get("persona") == r["persona"] and e["type"] == "thought" and e.get("eyes")}
         journeys.append({"persona": r["persona"], "status": r["status"], "reason": r.get("reason", ""), "goal": r.get("goal", ""),
                          "steps": r.get("steps", 0), "frustration": r.get("frustration", 0),
                          "timeline": [{"step": e["step"], "desc": e["desc"], "result": e["result"], "frustration": e["frustration"],
-                                       "agent_error": bool(e.get("agent_error"))} for e in steps]})
+                                       "agent_error": bool(e.get("agent_error")), "eyes": e["step"] in seen} for e in steps]})
     return {"run_id": run.id, "url": run.url, "elapsed_s": round(time.time() - run.t0, 1), "score": sc,
             "summary": nar.get("summary", ""), "release_advice": nar.get("release_advice", ""), "top_risks": nar.get("top_risks", []),
             "findings": deduped, "journeys": journeys,
             "llm_usage": {k: {"calls": v["calls"], "fails": v["fails"], "errors": v.get("errors", {}),
-                                "recent_errors": v.get("samples", [])} for k, v in STATS.items()}}
+                                "recent_errors": v.get("samples", [])} for k, v in STATS.items()},
+            "paid_usage": paid_usage(getattr(run, "usage0", {}), run.events)}
+
+
+def paid_usage(before: dict, events: list) -> dict:
+    """This run's OpenAI tokens and cost (exact counts reported by the API), and how often the vision navigator stepped in."""
+    models, total = {}, 0.0
+    for k, u in USAGE.items():
+        if not k.startswith("openai/"):
+            continue
+        b = before.get(k, {"in": 0, "cached": 0, "out": 0})
+        d = {f: u[f] - b[f] for f in ("in", "cached", "out")}
+        if d["in"] or d["out"]:
+            d["cost_usd"] = round(cost_usd(k, d), 5)
+            total += d["cost_usd"]
+            models[k.split("/", 1)[1]] = d
+    rescues = sum(1 for e in events if e["type"] == "thought" and e.get("eyes"))
+    return {"models": models, "cost_usd": round(total, 4), "navigator_rescues": rescues}

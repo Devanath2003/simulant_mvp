@@ -1,5 +1,6 @@
 """Run manager: launches one browser, runs the chosen personas concurrently, streams events, builds the report."""
 import asyncio
+import copy
 import json
 import os
 import time
@@ -9,8 +10,8 @@ from pathlib import Path
 import yaml
 from playwright.async_api import async_playwright
 
-from backend.config import RUNS_DIR
-from backend.llm.gateway import LLMError, llm
+from backend.config import PAID_CALLS_PER_RUN, PAID_RESERVE, RUNS_DIR
+from backend.llm.gateway import BUDGET, USAGE, LLMError, llm
 from backend.models import Finding, Persona
 from backend.navigator import prompts
 from backend.navigator.agent import Ctx, build_graph
@@ -74,6 +75,7 @@ class Run:
         self.status = "running"
         self.report: dict | None = None
         self.t0 = time.time()
+        self.usage0: dict = {}
         self._log = (self.dir / "events.jsonl").open("a", encoding="utf-8")
 
     def emit(self, type: str, **data):
@@ -154,6 +156,8 @@ async def run_persona(run: Run, pw, browser, persona: Persona) -> dict:
 
 
 async def execute_run(run: Run):
+    BUDGET.update(calls_left=PAID_CALLS_PER_RUN, reserve=PAID_RESERVE)
+    run.usage0 = copy.deepcopy(USAGE)          # the report shows only this run's paid tokens
     personas = load_personas()
     chosen = [personas[i] for i in run.persona_ids if i in personas]
     run.emit("run_start", url=run.url, personas=[{"id": p.id, "name": p.name, "engine": p.engine} for p in chosen], goal=run.goal)

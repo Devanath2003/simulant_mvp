@@ -67,6 +67,7 @@ ACTIONS:
 Respond with ONE JSON object only:
 {{"thought": "<first person, in character, max 25 words>",
  "action": "...", "target": <id or null>, "value": <string or null>,
+ "fields": <ONLY for action fill: [{{"target": <id>, "value": "<text>"}}, ...] one entry per field; otherwise []>,
  "confusion": <0-10, how confused/annoyed this screen makes YOU>,
 {attack_field} "ux_note": "<ONE concrete, observable problem on this screen from your persona's view (unlabeled icon, unreadable text, vague error, nothing happened, banner in the way, slow). Empty string if none. Never invent problems; needing to scroll or a long form is NOT a problem.>",
  "memory": "<your running notes, max 40 words{": baseline price, what you already tried and the totals before/after" if integrity else ": what you have done and what remains"}>"}}
@@ -75,7 +76,10 @@ Only use element ids that appear in the current list. Do not invent extra requir
 
 def fmt_element(e: dict) -> str:
     name = e["name"] or ("(no text - icon only)" if e.get("icon_only") else "(no label)")
-    s = f'[{e["id"]}] {e["type"]} "{name}"'
+    kind = e["type"]
+    if e.get("tag") in ("input", "textarea") and kind not in ("submit", "button", "checkbox", "radio", "image", "reset"):
+        kind = f"{'text' if e['tag'] == 'textarea' else kind} field"      # "[4] text "Full name"" read like a static label
+    s = f'[{e["id"]}] {kind} "{name}"'
     if e.get("value") not in (None, ""):
         s += f' value="{e["value"]}"'
     if e.get("options"):
@@ -176,6 +180,15 @@ Page: {obs['title']} ({obs['url']})
 Look at the screenshot. List at most 3 CONCRETE problems THIS user would hit, only ones you can point to on the screen: hard-to-read or low-contrast text, unclear icons or labels, jargon, cluttered layout, elements overlapping or hidden behind banners, tiny tap targets, confusing wording. Do NOT complain about missing features, images or content you cannot be sure should exist, and never about needing to scroll or a long form. Judge only how this screen looks and reads, not where the site navigated to (e.g. landing on a product list after login is normal). Skip anything that looks fine; an empty list is a good answer.
 JSON: {{"first_impression": "<what this user thinks at first glance, in their voice, max 20 words>",
  "issues": [{{"title": "<specific, max 14 words>", "detail": "<what and where on the screen>", "severity": "high|medium|low", "vital": "usability|accessibility"}}]}}"""
+
+
+def eyes_note(reason: str) -> str:
+    """Appended to the actor prompt when the vision navigator takes over a step (it sees a numbered screenshot)."""
+    return (f"\n\nYOU CAN NOW ALSO SEE THE SCREEN. The attached screenshot has numbered red boxes; each number is the element id "
+            f"in the list above. Navigation went wrong here: {reason}. Look at the screenshot like a person would and find "
+            "the real way forward: a menu behind a ☰ or 'Menu'/'Categories' button, the site's search box, a banner or popup "
+            "to close first, or a button that is visible on screen but described badly in the list. Stay in character, "
+            "use only ids from the list, and answer with the same JSON object.")
 
 
 GROUNDER_SYSTEM = ("The screenshot has numbered red boxes drawn over interactive elements. "

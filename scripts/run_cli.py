@@ -41,6 +41,7 @@ async def main():
             for f in r["findings"]:
                 print(f"  {f['id']:4s}[{SEV[f['severity']]}] {f['vital']:13s} {f['title'][:100]}  <- {','.join(f['personas'])}")
             print("llm usage:", r["llm_usage"])
+            print("paid usage:", r.get("paid_usage"))
         elif t == "run_end":
             break
     await task
