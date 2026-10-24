@@ -127,7 +127,7 @@ function renderNew() {
         <div class="spread" style="margin-bottom:20px"><h2 class="h-sm">Simulated users</h2><span class="label" id="pcount"></span></div>
         <div class="choose">${ids.map(id => {
           const p = PERSONAS[id];
-          return `<div class="pcard on" data-id="${id}" role="checkbox" aria-checked="true" tabindex="0">
+          return `<div class="pcard on${p.engine === "integrity" ? " pcard-clay" : ""}" data-id="${id}" role="checkbox" aria-checked="true" tabindex="0">
             <span class="tick">✓</span>
             <div><div class="label">${p.engine === "integrity" ? "Integrity engine" : "Empathy engine"}</div><h3 style="margin-top:8px">${esc(short(p.name))}</h3>
               <div class="graphite" style="font-size:14px;margin-top:6px">${esc(role(p.name))}</div></div>

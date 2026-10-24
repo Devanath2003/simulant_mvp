@@ -310,3 +310,7 @@ textarea.input { min-height: 96px; resize: vertical; line-height: 1.4; }
   .nav-links { display: none; } .vital { grid-template-columns: 110px 1fr 40px; }
   .card { padding: 28px; border-radius: 28px; }
 }
+/* Integrity Engine persona: the warm clay surface instead of periwinkle */
+.pcard.pcard-clay.on { background: color-mix(in srgb, var(--clay) 20%, var(--parchment)); border-color: transparent; }
+.pcard.pcard-clay .label { color: var(--clay-ink); }
+.pcard.pcard-clay .spec dt, .pcard.pcard-clay .muted { color: var(--clay-ink); }
